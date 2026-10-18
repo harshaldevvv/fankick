@@ -18,6 +18,7 @@ public sealed class Engine : IDisposable
     Thread? thread;
     volatile bool stop;
     bool lostLogged;
+    DateTime lastStatus = DateTime.MinValue;
 
     public Settings Settings { get; }
     public Sensor HottestSensor { get; } = new(Hottest, "Hottest CPU/GPU", "FanKick", SensorKind.Temperature);
@@ -154,6 +155,13 @@ public sealed class Engine : IDisposable
                 CheckStall(fan, alerts);
             }
         if (lost != lostLogged) { Log.Write(lost ? "sensor lost: " + string.Join(" ", alerts) : "sensors back"); lostLogged = lost; }
+        // Once a minute, a line to check the machine by later: the hottest temperature and every fan.
+        if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 60)
+        {
+            lastStatus = DateTime.UtcNow;
+            Log.Write($"status: hottest {hot:F0} °C{(Panic ? " PANIC" : "")}, " + string.Join(", ", Fans.Select(f =>
+                $"{f.Name} {(f.Percent < 0 ? "BIOS" : f.Percent + "%")}{(f.RpmSensorId is { } r && !float.IsNaN(Read(r)) ? $" {Read(r):F0} rpm" : "")}")));
+        }
         Alert = alerts.Count == 0 ? null : string.Join("\n", alerts);
     }
 
