@@ -40,22 +40,54 @@ public sealed class AsusAcpi : Core.IHardware, IResumable
     public IReadOnlyList<Sensor> Sensors => sensors;
     public IReadOnlyList<FanControl> Fans => fans;
 
-    AsusAcpi(SafeFileHandle h)
+    AsusAcpi(SafeFileHandle h, bool probeOnly = false)
     {
         handle = h;
-        foreach (var (name, curve, rpm) in Known)
-        {
-            var buf = Call(Dsts, Args(curve));
-            uint first = BitConverter.ToUInt32(buf, 0);
-            // No stored curve, or "unsupported" (0xFFFFFFFE) = no such fan.
-            if (buf.Take(16).All(b => b == 0) || first is 0xFFFFFFFE or 0xFFFFFFFF) continue;
-            var s = new Sensor($"asus/{curve:x}/rpm", name, "ASUS", SensorKind.Fan);
-            var f = new FanControl($"asus/{curve:x}", name, "ASUS") { RpmSensorId = s.Id };
-            sensors.Add(s);
-            fans.Add(f);
-            devs[f] = (curve, rpm, s);
-        }
+        if (probeOnly) return;
+        foreach (var (name, curve, rpm) in Find(this)) AddFan(name, curve, rpm);
         if (fans.Count > 0) WriteMode(Math.Max(0, Array.IndexOf(ModeNames, StartMode)));
+    }
+
+    // The fans this firmware has: a stored curve and a readable rpm. Models without a fan refuse the call (error 1)
+    // or answer "unsupported" (0xFFFFFFFE); either just means no such fan.
+    static IEnumerable<(string name, uint curve, uint rpm)> Find(AsusAcpi a)
+    {
+        foreach (var k in Known)
+        {
+            bool ok;
+            try
+            {
+                var buf = a.Call(Dsts, Args(k.curve));
+                uint first = BitConverter.ToUInt32(buf, 0);
+                ok = !buf.Take(16).All(b => b == 0) && first is not (0xFFFFFFFE or 0xFFFFFFFF);
+                if (ok) a.Call(Dsts, Args(k.rpm));
+            }
+            catch (IOException ex) { Log.Write($"ASUS ACPI: no {k.name} ({ex.Message})"); ok = false; }
+            if (ok) yield return k;
+        }
+    }
+
+    // `FanKick --probe-asus`: log which ASUS fans and speeds FanKick sees, reading only (no writes).
+    public static void Probe()
+    {
+        var h = CreateFile(@"\\.\ATKACPI", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (h.IsInvalid) { Log.Write("probe: no ATKACPI device (error " + Marshal.GetLastWin32Error() + ")"); return; }
+        using (h)
+        {
+            var a = new AsusAcpi(h, probeOnly: true);
+            foreach (var (name, curve, rpm) in Find(a))
+                Log.Write($"probe: {name} (curve {curve:x8}) at {(BitConverter.ToUInt32(a.Call(Dsts, Args(rpm)), 0) & 0xFFFF) * 100} rpm");
+            Log.Write("probe: done");
+        }
+    }
+
+    void AddFan(string name, uint curve, uint rpm)
+    {
+        var s = new Sensor($"asus/{curve:x}/rpm", name, "ASUS", SensorKind.Fan);
+        var f = new FanControl($"asus/{curve:x}", name, "ASUS") { RpmSensorId = s.Id };
+        sensors.Add(s);
+        fans.Add(f);
+        devs[f] = (curve, rpm, s);
     }
 
     public static AsusAcpi? TryOpen()

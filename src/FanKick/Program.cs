@@ -22,6 +22,7 @@ static class Program
         if (a >= 0 && a + 1 < args.Length)
             try { Platform.Autostart = args[a + 1] == "on"; return 0; }
             catch (Exception ex) { Log.Write("autostart: " + ex.Message); return 1; }
+        if (args.Contains("--probe-asus")) { if (OperatingSystem.IsWindows()) AsusAcpi.Probe(); return 0; }
         int s = Array.IndexOf(args, "--screenshots");
         if (s >= 0 && s + 1 < args.Length) ScreenshotDir = Path.GetFullPath(args[s + 1]);
         Demo = args.Contains("--demo") || ScreenshotDir != null;
