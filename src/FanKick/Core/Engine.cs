@@ -68,6 +68,13 @@ public sealed class Engine : IDisposable
             var now = DateTime.UtcNow;
             try
             {
+                // This loop freezes while the machine sleeps, so a long gap means it just woke up.
+                if ((now - last).TotalSeconds > 60)
+                {
+                    Log.Write($"woke after {(now - last).TotalMinutes:F0} min");
+                    foreach (var r in hardware.OfType<IResumable>())
+                        try { r.Resume(); } catch (Exception ex) { Log.Write("resume: " + ex.Message); }
+                }
                 Refresh();
                 Tick(Math.Clamp((now - last).TotalSeconds, 0, 5));
             }

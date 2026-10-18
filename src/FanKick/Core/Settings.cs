@@ -42,6 +42,8 @@ public sealed class Settings
     public FailSafe OnExit { get; set; } = FailSafe.Bios;
     public int IntervalMs { get; set; } = 1000;
     public OverlaySettings Overlay { get; set; } = new();
+    // Performance modes picked in FanKick (group title -> option), set again at every start.
+    public Dictionary<string, string> Modes { get; set; } = [];
     // ASUS laptops whose BIOS flips the custom fan curve at every write (see AsusAcpi).
     public bool AsusWriteTwice { get; set; }
 

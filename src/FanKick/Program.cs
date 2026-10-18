@@ -80,7 +80,11 @@ static class Guard
         var settings = Settings.Load(Settings.DefaultPath);
         bool full = settings.OnCrash == FailSafe.FullSpeed;
         Log.Write($"guard: FanKick (pid {pid}) stopped without a clean exit, setting every fan to {(full ? "full speed" : "BIOS control")}");
-        if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = settings.AsusWriteTwice;
+        if (OperatingSystem.IsWindows())
+        {
+            AsusAcpi.WriteTwice = settings.AsusWriteTwice;
+            if (settings.Modes.TryGetValue("ASUS mode", out var m)) AsusAcpi.StartMode = m;
+        }
         foreach (var hw in Backends.Create(false, []))
             foreach (var fan in hw.Fans)
                 try { if (full) hw.Set(fan, 100); else hw.Restore(fan); }

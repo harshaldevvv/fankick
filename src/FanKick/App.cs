@@ -62,6 +62,7 @@ public sealed class App : Application
     public void StartEngine()
     {
         if (Engine != null) return;
+        if (OperatingSystem.IsWindows() && Settings.Modes.TryGetValue("ASUS mode", out var asusMode)) AsusAcpi.StartMode = asusMode;
         var hw = Backends.Create(Program.Demo, Modes);
         Engine = new Core.Engine(hw, Settings);
         if (Program.Demo)
@@ -72,6 +73,14 @@ public sealed class App : Application
         Engine.Start();
         Log.Write($"engine: {hw.Count} backend(s), {Engine.Sensors.Count} sensors, {Engine.Fans.Count} fans: " + string.Join(", ", Engine.Fans.Select(f => f.Name)));
         if (!Program.Demo && Engine.Fans.Count > 0 && !OperatingSystem.IsMacOS()) Guard.Spawn();
+        // Modes picked in FanKick are set again at every start (some firmware, like ASUS's charge limit, forgets them).
+        var saved = Settings.Modes.ToList();
+        _ = Task.Run(() =>
+        {
+            foreach (var (title, option) in saved)
+                if (Modes.FirstOrDefault(g => g.Title == title) is { } g && g.Options.Contains(option) && g.Current != option)
+                    try { g.Set(option); } catch (Exception ex) { Log.Write($"{title}: {ex.Message}"); }
+        });
         window?.Rebuild();
         Conflicts = [];
     }

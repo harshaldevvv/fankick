@@ -380,7 +380,7 @@ sealed class MainWindow : Window
                     if (r.IsChecked != true || (string?)r.Content == g.Current) return;
                     string opt = (string)r.Content!;
                     status.Text = "Applying...";
-                    try { await Task.Run(() => g.Set(opt)); status.Text = ""; }
+                    try { await Task.Run(() => g.Set(opt)); status.Text = ""; lock (S) S.Modes[g.Title] = opt; app.Save(); }
                     catch (Exception ex) { status.Text = "Couldn't change it: " + ex.Message; }
                     Show(await Task.Run(() => g.Current));
                 };

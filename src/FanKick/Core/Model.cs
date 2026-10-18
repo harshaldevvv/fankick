@@ -49,3 +49,9 @@ public interface IHardware : IDisposable
     // Hand the fan back to the BIOS / firmware / driver default.
     void Restore(FanControl fan);
 }
+
+// Backends whose hardware can drop our settings while the machine sleeps (ASUS firmware does).
+public interface IResumable
+{
+    void Resume();
+}
