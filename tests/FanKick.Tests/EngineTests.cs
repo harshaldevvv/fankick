@@ -10,8 +10,9 @@ static class TestSetup
     internal static void Init() => Log.Path = Path.Combine(Path.GetTempPath(), "FanKick-tests.log");
 }
 
-sealed class FakeHardware : IHardware, IResumable
+sealed class FakeHardware : IHardware, IResumable, IWriteLimited
 {
+    public int MinStep { get; set; }
     public readonly Sensor Cpu = new("cpu", "CPU", "cpu", SensorKind.Temperature) { Critical = true, Cpu = true, Value = 50 };
     public readonly Sensor Disk = new("disk", "Disk", "disk", SensorKind.Temperature) { Value = 40 };
     public readonly Sensor Rpm = new("rpm", "Fan", "board", SensorKind.Fan);
@@ -197,6 +198,26 @@ public class SettingsFileTests
 
 public class SafetyTests
 {
+    [Fact]
+    public void Write_limited_backends_only_get_real_changes()
+    {
+        hw.MinStep = 10;
+        Make(s => { s.Curves.Add(new GraphCurve { Name = "c", Sensor = "cpu", Hysteresis = 0, Points = [new(40, 0), new(90, 100)] });
+                    s.Fans["fan"] = new FanSettings { Mode = FanMode.Curve, Curve = "c", StepUp = 0, StepDown = 0 }; });
+        Assert.Equal(20, hw.Fan.Percent);                      // 50 C: first write always happens
+        hw.Cpu.Value = 54; Run(1);
+        Assert.Equal(20, hw.Fan.Percent);                      // +8: held
+        hw.Cpu.Value = 56; Run(1);
+        Assert.Equal(32, hw.Fan.Percent);                      // +12: written
+        hw.Cpu.Value = 48; Run(1);
+        Assert.Equal(32, hw.Fan.Percent);                      // -16: held (down needs 20)
+        hw.Cpu.Value = 45; Run(1);
+        Assert.Equal(10, hw.Fan.Percent);                      // -22: written
+        hw.Cpu.Value = 89.6f; Run(1);
+        hw.Cpu.Value = 95; Run(1);
+        Assert.Equal(100, hw.Fan.Percent);                     // 100% always goes through
+    }
+
     DateTime t = new(2026, 1, 1);
     readonly FakeHardware hw = new();
     Engine e = null!;

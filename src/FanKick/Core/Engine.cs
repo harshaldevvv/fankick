@@ -228,6 +228,8 @@ public sealed class Engine : IDisposable
         level[fan] = next;
         int pct = (int)MathF.Round(next);
         if (pct == fan.Percent) return;
+        if (hw is IWriteLimited wl && fan.Percent >= 0 && pct != 100
+            && (pct > fan.Percent ? pct - fan.Percent < wl.MinStep : fan.Percent - pct < 2 * wl.MinStep)) return;
         try
         {
             hw.Set(fan, pct);

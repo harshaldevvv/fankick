@@ -11,7 +11,7 @@ namespace FanKick.Hardware;
 // so the embedded controller runs the fan at exactly that speed whatever temperature it sees. Also the ASUS
 // performance mode (Silent / Balanced / Turbo) and the battery charge limit.
 [SupportedOSPlatform("windows")]
-public sealed class AsusAcpi : Core.IHardware, IResumable
+public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
 {
     const uint Ioctl = 0x0022240C, Dsts = 0x53545344, Devs = 0x53564544;
     const uint ModeDev = 0x00120075, ChargeDev = 0x00120057;
@@ -36,6 +36,9 @@ public sealed class AsusAcpi : Core.IHardware, IResumable
     int mode;
 
     public string Name => "ASUS ACPI";
+    // Each curve write dips the fan by ~1,500 rpm, and on flip-on-write BIOSes every extra write is a chance to lose
+    // track of whether the curve is on: write only real changes.
+    public int MinStep => 10;
     public string? Notice => null;
     public IReadOnlyList<Sensor> Sensors => sensors;
     public IReadOnlyList<FanControl> Fans => fans;

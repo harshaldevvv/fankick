@@ -52,6 +52,13 @@ public interface IHardware : IDisposable
     void Restore(FanControl fan);
 }
 
+// Backends where every write costs something (a speed dip, a firmware quirk): the engine only writes a change of at
+// least MinStep points going up and twice that going down, plus any move to 100%.
+public interface IWriteLimited
+{
+    int MinStep { get; }
+}
+
 // Backends whose hardware can drop our settings while the machine sleeps (ASUS firmware does).
 public interface IResumable
 {
