@@ -66,6 +66,8 @@ public sealed class App : Application
         if (OperatingSystem.IsWindows() && Settings.Modes.TryGetValue("ASUS mode", out var asusMode)) AsusAcpi.StartMode = asusMode;
         var hw = Backends.Create(Program.Demo, Modes);
         Engine = new Core.Engine(hw, Settings);
+        Engine.Learned += () => Dispatcher.UIThread.Post(Save);
+        Engine.Updated += Protect;
         if (Program.Demo)
         {
             if (!File.Exists(SettingsPath)) foreach (var fs in Settings.Fans.Values) { fs.Mode = FanMode.Curve; fs.Curve = "Balanced"; }
@@ -84,6 +86,28 @@ public sealed class App : Application
         });
         window?.Rebuild();
         Conflicts = [];
+    }
+
+    // CPU boost off while the engine asks for it (CPU temperature limit, CPU temperature lost, fans not following),
+    // and back to what it was afterwards. Where the OS has no boost switch (macOS) the engine's full-speed fans remain.
+    bool protecting;
+    string? boostBefore;
+    void Protect()
+    {
+        bool want = Engine?.ProtectCpu == true;
+        if (want == protecting) return;
+        protecting = want;
+        var g = Modes.FirstOrDefault(m => m.Title == "CPU boost");
+        if (g == null) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (want) { boostBefore = g.Current; if (boostBefore != "Off") g.Set("Off"); }
+                else if (boostBefore is { } b && b != "Off" && g.Options.Contains(b)) g.Set(b);
+            }
+            catch (Exception ex) { Log.Write("CPU boost: " + ex.Message); }
+        });
     }
 
     // Settings changes are saved a second after the last edit.

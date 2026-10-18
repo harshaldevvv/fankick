@@ -1,7 +1,8 @@
 namespace FanKick.Core;
 
 // The control loop: reads every backend, works out each fan's target from its settings, moves it there at the
-// fan's step rate, and keeps the safety rules (panic temperature, lost sensor, failing writes) above everything else.
+// fan's step rate, and keeps the safety rules above everything else: panic temperature, CPU temperature limit, lost
+// sensors, failing writes, and a watchdog that re-applies control to a fan that stops following it.
 public sealed class Engine : IDisposable
 {
     public const string Hottest = "virtual/hottest";
@@ -12,13 +13,24 @@ public sealed class Engine : IDisposable
     readonly Dictionary<FanControl, IHardware> owner = [];
     readonly Dictionary<FanControl, float> level = [];
     readonly Dictionary<FanControl, int> failures = [];
-    readonly Dictionary<FanControl, DateTime> stalledSince = [];
+    readonly Dictionary<FanControl, Watch> watch = [];
     readonly Dictionary<string, float[]> history = [];
     int histCount;
     Thread? thread;
     volatile bool stop;
     bool lostLogged;
     DateTime lastStatus = DateTime.MinValue;
+    DateTime? overSince, underSince, cpuMissingSince;
+    bool cpuSeen;
+
+    // Per fan: when its speed last changed, and the watchdog's state.
+    sealed class Watch
+    {
+        public DateTime Changed;
+        public DateTime? SlowSince, OkSince;
+        public DateTime NextTry;
+        public int Tries;
+    }
 
     public Settings Settings { get; }
     public Sensor HottestSensor { get; } = new(Hottest, "Hottest CPU/GPU", "FanKick", SensorKind.Temperature);
@@ -27,7 +39,19 @@ public sealed class Engine : IDisposable
     public IReadOnlyList<string> Notices { get; }
     public string? Alert { get; private set; }
     public bool Panic { get; private set; }
+    // CPU at or over Settings.CpuLimit (see CpuTemperature).
+    public bool LimitActive { get; private set; }
+    // The CPU temperature was readable and is not any more.
+    public bool CpuLost { get; private set; }
+    // A fan ignored three re-applies in a row.
+    public bool FansFailing { get; private set; }
+    // The app turns CPU boost off while this holds.
+    public bool ProtectCpu => LimitActive || CpuLost || FansFailing;
     public event Action? Updated;
+    // Raised when the watchdog learns a fan's speed, so the app can save it.
+    public event Action? Learned;
+    // The clock, swappable for tests.
+    public Func<DateTime> Now { get; set; } = () => DateTime.UtcNow;
 
     public Engine(IEnumerable<IHardware> backends, Settings settings)
     {
@@ -78,8 +102,7 @@ public sealed class Engine : IDisposable
                 if ((now - last).TotalSeconds > 60)
                 {
                     Log.Write($"woke after {(now - last).TotalMinutes:F0} min");
-                    foreach (var r in hardware.OfType<IResumable>())
-                        try { r.Resume(); } catch (Exception ex) { Log.Write("resume: " + ex.Message); }
+                    Resume();
                 }
                 Refresh();
                 Tick(Math.Clamp((now - last).TotalSeconds, 0, 5));
@@ -115,6 +138,21 @@ public sealed class Engine : IDisposable
         }
     }
 
+    // After sleep, firmware may have dropped our settings (ASUS laptops do; desktop Super I/O chips can reset on S3):
+    // redo each backend's startup sequence, or write every driven fan again.
+    public void Resume()
+    {
+        foreach (var h in hardware)
+            try
+            {
+                if (h is IResumable r) r.Resume();
+                else foreach (var f in h.Fans.Where(f => f.Percent >= 0)) h.Set(f, f.Percent);
+            }
+            catch (Exception ex) { Log.Write($"{h.Name}: resume failed: {ex.Message}"); }
+        var t = Now();
+        foreach (var w in watch.Values) { w.Changed = t; w.SlowSince = null; }
+    }
+
     public static float Step(float current, float target, float up, float down, double seconds)
     {
         if (target > current) return up <= 0 ? target : MathF.Min(target, current + up * (float)seconds);
@@ -124,7 +162,9 @@ public sealed class Engine : IDisposable
     public void Tick(double seconds)
     {
         var alerts = new List<string>();
+        var clock = Now();
         float hot = HottestSensor.Value;
+        CpuTemperature(clock, alerts);
         if (!float.IsNaN(hot))
         {
             bool was = Panic;
@@ -133,6 +173,7 @@ public sealed class Engine : IDisposable
             if (Panic != was) Log.Write(Panic ? $"PANIC: {hot:F0} °C, all fans to 100%" : $"panic over ({hot:F0} °C)");
         }
         if (Panic) alerts.Add($"{hot:F0} °C is over the {Settings.PanicTemp} °C panic limit: every fan at full speed.");
+        bool full = Panic || LimitActive || (CpuLost && Settings.OnSensorLost == FailSafe.FullSpeed);
 
         bool lost = false;
         lock (Settings)
@@ -140,8 +181,8 @@ public sealed class Engine : IDisposable
             {
                 var fs = Settings.Fan(fan.Id);
                 float? target = null;
-                bool now = Panic;
-                if (Panic) target = 100;
+                bool now = full;
+                if (full) target = 100;
                 else if (fs.Mode == FanMode.Fixed) target = fs.Fixed;
                 else if (fs.Mode == FanMode.Curve)
                 {
@@ -150,27 +191,28 @@ public sealed class Engine : IDisposable
                     else
                     {
                         lost = true;
-                        bool full = Settings.OnSensorLost == FailSafe.FullSpeed;
-                        alerts.Add($"{fan.Name}: its curve has no sensor reading, so {(full ? "it runs at full speed" : "the BIOS drives it")}.");
-                        if (full) { target = 100; now = true; }
+                        bool toFull = Settings.OnSensorLost == FailSafe.FullSpeed;
+                        alerts.Add($"{fan.Name}: its curve has no sensor reading, so {(toFull ? "it runs at full speed" : "the BIOS drives it")}.");
+                        if (toFull) { target = 100; now = true; }
                     }
                 }
                 if (target is { } t && !now) target = Math.Clamp(t, fs.Min, Math.Max(fs.Min, fs.Max));
-                Apply(fan, target, now, fs, seconds);
-                CheckStall(fan, alerts);
+                Apply(fan, target, now, fs, seconds, clock);
+                Watchdog(fan, fs, alerts, clock);
             }
+        FansFailing = watch.Values.Any(w => w.Tries >= 3 && w.SlowSince != null);
         if (lost != lostLogged) { Log.Write(lost ? "sensor lost: " + string.Join(" ", alerts) : "sensors back"); lostLogged = lost; }
         // Once a minute, a line to check the machine by later: the hottest temperature and every fan.
         if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 60)
         {
             lastStatus = DateTime.UtcNow;
-            Log.Write($"status: hottest {hot:F0} °C{(Panic ? " PANIC" : "")}, " + string.Join(", ", Fans.Select(f =>
+            Log.Write($"status: hottest {hot:F0} °C{(Panic ? " PANIC" : "")}{(LimitActive ? " LIMIT" : "")}{(CpuLost ? " NO-CPU-TEMP" : "")}{(FansFailing ? " FANS-FAILING" : "")}, " + string.Join(", ", Fans.Select(f =>
                 $"{f.Name} {(f.Percent < 0 ? "BIOS" : f.Percent + "%")}{(f.RpmSensorId is { } r && !float.IsNaN(Read(r)) ? $" {Read(r):F0} rpm" : "")}")));
         }
         Alert = alerts.Count == 0 ? null : string.Join("\n", alerts);
     }
 
-    void Apply(FanControl fan, float? target, bool now, FanSettings fs, double seconds)
+    void Apply(FanControl fan, float? target, bool now, FanSettings fs, double seconds, DateTime clock)
     {
         var hw = owner[fan];
         if (target is not { } t)
@@ -189,6 +231,7 @@ public sealed class Engine : IDisposable
         try
         {
             hw.Set(fan, pct);
+            W(fan, clock).Changed = clock;
             if (fan.Percent < 0 || Math.Abs(pct - fan.Percent) >= 10 || pct == 100) Log.Write($"{fan.Name} -> {pct}%");
             fan.Percent = pct;
             failures[fan] = 0;
@@ -201,17 +244,91 @@ public sealed class Engine : IDisposable
         }
     }
 
-    // A fan asked for 40%+ that shows under 100 rpm for 15 s is stuck or unplugged: say so (the curve can't fix it).
-    void CheckStall(FanControl fan, List<string> alerts)
+    Watch W(FanControl fan, DateTime clock) => watch.TryGetValue(fan, out var w) ? w : watch[fan] = new Watch { Changed = clock };
+
+    // CPU temperature limit, and the fail-safe for a CPU temperature that stops reading.
+    void CpuTemperature(DateTime clock, List<string> alerts)
     {
-        if (fan.RpmSensorId is null) return;
-        float rpm = Read(fan.RpmSensorId);
-        if (fan.Percent >= 40 && rpm < 100)
+        var temps = Sensors.Where(s => s.Cpu && !float.IsNaN(s.Value)).Select(s => s.Value).ToList();
+        float cpu = temps.Count == 0 ? float.NaN : temps.Max();
+        if (!float.IsNaN(cpu))
         {
-            var since = stalledSince.TryGetValue(fan, out var s) ? s : stalledSince[fan] = DateTime.UtcNow;
-            if ((DateTime.UtcNow - since).TotalSeconds >= 15) alerts.Add($"{fan.Name} is not spinning (asked for {fan.Percent}%).");
+            cpuSeen = true;
+            cpuMissingSince = null;
+            if (CpuLost) { CpuLost = false; Log.Write($"CPU temperature readable again ({cpu:F0} °C)"); }
         }
-        else stalledSince.Remove(fan);
+        else if (cpuSeen && !CpuLost && (clock - (cpuMissingSince ??= clock)).TotalSeconds >= 5)
+        {
+            CpuLost = true;
+            Log.Write("CPU temperature lost: fans to " + (Settings.OnSensorLost == FailSafe.FullSpeed ? "full speed" : "BIOS control") + ", CPU boost off");
+        }
+        if (CpuLost) alerts.Add("The CPU temperature can't be read any more, so every fan runs at full speed and CPU boost is off.");
+
+        int lim = Settings.CpuLimit;
+        if (lim > 0 && cpu >= lim) { overSince ??= clock; underSince = null; }
+        else if (lim <= 0 || cpu <= lim - 10) { underSince ??= clock; overSince = null; }
+        else { overSince = null; underSince = null; }
+        if (!LimitActive && overSince is { } o && (clock - o).TotalSeconds >= 6)
+        {
+            LimitActive = true;
+            Log.Write($"CPU {cpu:F0} °C, over the {lim} °C limit: every fan to 100%, CPU boost off");
+        }
+        else if (LimitActive && (lim <= 0 || underSince is { } u && (clock - u).TotalSeconds >= 60))
+        {
+            LimitActive = false;
+            Log.Write($"CPU {cpu:F0} °C, under the limit for a minute: fans and boost back to normal");
+        }
+        if (LimitActive) alerts.Add($"The CPU reached the {lim} °C limit: every fan at full speed and CPU boost off until it has been under {lim - 10} °C for a minute.");
+    }
+
+    // Fan watchdog. A fan we drive that reads far below the speed it normally reaches at that % (learned per 10% step),
+    // or not at all, is not following us: firmware that dropped our setting after sleep, another program, or a locked
+    // controller. Re-apply control (the backend's startup sequence where it has one), check again, back off between
+    // tries, and after three failed tries raise the alarm (the app then turns CPU boost off).
+    void Watchdog(FanControl fan, FanSettings fs, List<string> alerts, DateTime clock)
+    {
+        var w = W(fan, clock);
+        if (fan.RpmSensorId is null || fan.Percent < 0) { w.SlowSince = null; return; }
+        float rpm = Read(fan.RpmSensorId);
+        if (float.IsNaN(rpm) || rpm > 20000) return;
+        int step = Math.Clamp(fan.Percent / 10, 0, 10);
+        int normal = fs.Rpm.GetValueOrDefault(step);
+        bool dead = fan.Percent >= 30 && rpm < 100;
+        bool slow = dead || (fan.Percent >= 20 && normal > 0 && rpm < normal * 0.7f);
+        double settled = (clock - w.Changed).TotalSeconds;
+        if (!slow)
+        {
+            w.SlowSince = null;
+            if (w.Tries > 0 && (clock - (w.OkSince ??= clock)).TotalSeconds >= 10)
+            {
+                Log.Write($"watchdog: {fan.Name} back to {rpm:F0} rpm at {fan.Percent}%");
+                w.Tries = 0;
+                w.OkSince = null;
+            }
+            if (w.Tries == 0 && settled >= 30 && rpm > 100 && (normal == 0 || rpm > normal * 1.03f))
+            {
+                fs.Rpm[step] = (int)rpm;
+                Learned?.Invoke();
+            }
+            return;
+        }
+        w.OkSince = null;
+        if (settled < (rpm < 100 ? 75 : 30)) return; // a fan starting from standstill can take a minute
+        w.SlowSince ??= clock;
+        if (w.Tries >= 3)
+            alerts.Add($"{fan.Name} isn't following FanKick: {rpm:F0} rpm at {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}. CPU boost is off until it does. If it started after sleep, hibernating or shutting down fully (not restarting) resets the fan controller on some laptops.");
+        if ((clock - w.SlowSince.Value).TotalSeconds < 10 || clock < w.NextTry) return;
+        w.Tries++;
+        Log.Write($"watchdog: {fan.Name} at {rpm:F0} rpm for {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}: re-applying (try {w.Tries})");
+        try
+        {
+            if (owner[fan] is IResumable r) r.Resume();
+            else owner[fan].Set(fan, fan.Percent);
+        }
+        catch (Exception ex) { Log.Write($"watchdog: {fan.Name}: {ex.Message}"); }
+        w.Changed = clock;
+        w.SlowSince = null;
+        w.NextTry = clock.AddSeconds(Math.Min(600, 60 << Math.Min(w.Tries - 1, 4)));
     }
 
     // Every fan back to the BIOS, or to full speed when that is the safer choice (a crash on a machine whose BIOS

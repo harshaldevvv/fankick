@@ -450,7 +450,9 @@ sealed class MainWindow : Window
         }
         var safety = Col(8, Heading("Safety"),
             Labeled("Panic temperature (°C)", Number(S.PanicTemp, 60, 110, v => { S.PanicTemp = (int)v; app.Save(); }), "Any CPU/GPU core at this: every fan to 100% until 10 °C under it."),
-            Labeled("If a curve's sensor is lost", Fail(S.OnSensorLost, v => S.OnSensorLost = v)),
+            Labeled("CPU temperature limit (°C)", Number(S.CpuLimit, 0, 105, v => { S.CpuLimit = (int)v; app.Save(); }),
+                "At or over this for 6 s: every fan to 100% and CPU boost off, until it has been 10 °C under for a minute. 0 = off."),
+            Labeled("If a curve's sensor is lost", Fail(S.OnSensorLost, v => S.OnSensorLost = v), "Also applies if the CPU temperature stops reading."),
             Labeled("If FanKick crashes", Fail(S.OnCrash, v => S.OnCrash = v), OperatingSystem.IsMacOS() ? "On a Mac the SMC takes the fans back by itself." : "A small guard process applies this if FanKick dies."),
             Labeled("When FanKick quits", Fail(S.OnExit, v => S.OnExit = v)),
             Labeled("Update every (ms)", Number(S.IntervalMs, 250, 5000, v => { S.IntervalMs = (int)v; app.Save(); }, 250)));

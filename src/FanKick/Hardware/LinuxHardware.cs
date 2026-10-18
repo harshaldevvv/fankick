@@ -73,7 +73,7 @@ public sealed class LinuxHardware : IHardware
             string label = ReadText($"{dir}/{stem}_label") ?? stem;
             bool critical = kind == SensorKind.Temperature && (chip is "k10temp" or "zenpower" && label is "Tctl" or "Tdie" || chip == "coretemp" && label.StartsWith("Package")
                             || chip is "amdgpu" or "i915" or "xe" && label is "edge" or "junction" or "temp1" && !label.StartsWith("mem"));
-            var s = Add(new Sensor($"{id}/{stem}", label, group, kind) { Critical = critical });
+            var s = Add(new Sensor($"{id}/{stem}", label, group, kind) { Critical = critical, Cpu = critical && group == "CPU" });
             files.Add((s, $"{dir}/{f}", scale));
         }
         // pwmN with pwmN_enable = a fan header we can drive (1 = manual, 2+ = automatic modes).

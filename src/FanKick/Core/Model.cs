@@ -12,6 +12,8 @@ public sealed class Sensor(string id, string name, string group, SensorKind kind
     public float Value { get; set; } = float.NaN;
     // CPU package / GPU core temps: the panic temperature and the "Hottest CPU/GPU" source watch these.
     public bool Critical { get; init; }
+    // A CPU temperature: the CPU temperature limit watches these.
+    public bool Cpu { get; init; }
 
     public string Unit => Kind switch
     {

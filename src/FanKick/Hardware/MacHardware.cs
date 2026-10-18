@@ -51,7 +51,7 @@ public sealed class MacHardware : IHardware
             if (key is null || key[0] != 'T') continue;
             if (Value(key) is not { } v || v <= 0 || v > 150) continue; // unused slots read 0 or garbage
             var (name, group, critical) = Describe(key);
-            var s = new Sensor("smc/" + key, name, group, SensorKind.Temperature) { Critical = critical, Value = v };
+            var s = new Sensor("smc/" + key, name, group, SensorKind.Temperature) { Critical = critical, Cpu = critical && group == "CPU", Value = v };
             sensors.Add(s);
             reads.Add((s, key));
         }

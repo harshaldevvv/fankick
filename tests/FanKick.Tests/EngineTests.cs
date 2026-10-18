@@ -10,16 +10,18 @@ static class TestSetup
     internal static void Init() => Log.Path = Path.Combine(Path.GetTempPath(), "FanKick-tests.log");
 }
 
-sealed class FakeHardware : IHardware
+sealed class FakeHardware : IHardware, IResumable
 {
-    public readonly Sensor Cpu = new("cpu", "CPU", "cpu", SensorKind.Temperature) { Critical = true, Value = 50 };
+    public readonly Sensor Cpu = new("cpu", "CPU", "cpu", SensorKind.Temperature) { Critical = true, Cpu = true, Value = 50 };
     public readonly Sensor Disk = new("disk", "Disk", "disk", SensorKind.Temperature) { Value = 40 };
-    public readonly FanControl Fan = new("fan", "Fan", "board");
+    public readonly Sensor Rpm = new("rpm", "Fan", "board", SensorKind.Fan);
+    public readonly FanControl Fan = new("fan", "Fan", "board") { RpmSensorId = "rpm" };
+    public void Resume() => Calls.Add("resume");
     public readonly List<string> Calls = [];
     public bool FailWrites;
     public string Name => "fake";
     public string? Notice => null;
-    public IReadOnlyList<Sensor> Sensors => [Cpu, Disk];
+    public IReadOnlyList<Sensor> Sensors => [Cpu, Disk, Rpm];
     public IReadOnlyList<FanControl> Fans => [Fan];
     public void Update() { }
     public void Set(FanControl fan, int percent) { if (FailWrites) throw new IOException("nope"); Calls.Add("set " + percent); }
@@ -190,5 +192,112 @@ public class SettingsFileTests
         e.Refresh(); e.Tick(1);
         Assert.Equal(100, hw.Fan.Percent);
         File.Delete(path);
+    }
+}
+
+public class SafetyTests
+{
+    DateTime t = new(2026, 1, 1);
+    readonly FakeHardware hw = new();
+    Engine e = null!;
+
+    Engine Make(Action<Settings> setup)
+    {
+        var s = new Settings();
+        setup(s);
+        e = new Engine([hw], s) { Now = () => t };
+        Run(0);
+        return e;
+    }
+
+    // Advance the clock `secs` seconds, one tick per second.
+    void Run(int secs)
+    {
+        for (int i = 0; i <= secs; i++) { e.Refresh(); e.Tick(1); if (i < secs) t = t.AddSeconds(1); }
+    }
+
+    [Fact]
+    public void Watchdog_learns_then_reapplies_a_slow_fan_and_sees_it_recover()
+    {
+        hw.Rpm.Value = 5200;
+        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 100 });
+        Run(31);
+        Assert.Equal(5200, e.Settings.Fans["fan"].Rpm[10]);   // learned once settled
+        hw.Rpm.Value = 2900;                                   // like a fan the firmware took back after sleep
+        Run(9);
+        Assert.DoesNotContain("resume", hw.Calls);             // must stay slow for 10 s first
+        Run(2);
+        Assert.Contains("resume", hw.Calls);
+        hw.Rpm.Value = 5250;
+        Run(15);
+        Assert.False(e.FansFailing);
+        Assert.Null(e.Alert);
+    }
+
+    [Fact]
+    public void Watchdog_raises_the_alarm_after_three_failed_tries()
+    {
+        hw.Rpm.Value = 5200;
+        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 100 });
+        Run(31);
+        hw.Rpm.Value = 3000;
+        Run(400);                                              // tries back off: 60 s, then 120 s
+        Assert.Equal(3, hw.Calls.Count(c => c == "resume"));
+        Assert.True(e.FansFailing);
+        Assert.True(e.ProtectCpu);
+        Assert.Contains("isn't following", e.Alert);
+        hw.Rpm.Value = 5200;
+        Run(12);
+        Assert.False(e.FansFailing);
+    }
+
+    [Fact]
+    public void Watchdog_catches_a_dead_fan_without_learning_first()
+    {
+        hw.Rpm.Value = 0;
+        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 60 });
+        Run(80);                                               // a fan from standstill gets 75 s, then 10 s slow
+        Assert.DoesNotContain("resume", hw.Calls);
+        Run(10);
+        Assert.Contains("resume", hw.Calls);
+    }
+
+    [Fact]
+    public void Cpu_limit_forces_full_speed_until_ten_under_for_a_minute()
+    {
+        Make(s => { s.CpuLimit = 80; s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 }; });
+        Assert.Equal(40, hw.Fan.Percent);
+        hw.Cpu.Value = 82;
+        Run(5);
+        Assert.False(e.LimitActive);                           // 6 s at or over it
+        Run(1);
+        Assert.True(e.LimitActive);
+        Assert.True(e.ProtectCpu);
+        Assert.Equal(100, hw.Fan.Percent);
+        hw.Cpu.Value = 75;                                     // under the limit but not 10 under: holds
+        Run(120);
+        Assert.True(e.LimitActive);
+        hw.Cpu.Value = 69;
+        Run(59);
+        Assert.True(e.LimitActive);
+        Run(1);
+        Assert.False(e.LimitActive);
+        Run(25);                                               // back down at the fan's 3 %/s step-down rate
+        Assert.Equal(40, hw.Fan.Percent);
+    }
+
+    [Fact]
+    public void Lost_cpu_temperature_goes_full_speed()
+    {
+        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 });
+        hw.Cpu.Value = float.NaN;
+        Run(4);
+        Assert.False(e.CpuLost);
+        Run(1);
+        Assert.True(e.CpuLost);
+        Assert.Equal(100, hw.Fan.Percent);
+        hw.Cpu.Value = 50;
+        Run(1);
+        Assert.False(e.CpuLost);
     }
 }

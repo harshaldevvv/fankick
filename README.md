@@ -75,7 +75,16 @@ FanKick controls real hardware, so it assumes things will go wrong:
   speed (or BIOS). On a Mac the SMC takes the fans back by itself.
 - **Quit:** fans go back to BIOS control (or full speed, your choice).
 - **Failing writes:** three failed writes in a row hand that fan back to the BIOS.
-- **Stalled fan alert:** a fan asked for 40%+ that shows no rpm is flagged.
+- **CPU temperature limit** (default 90 °C, on by default): at or over it for 6 seconds, every fan goes to 100% and CPU
+  boost is turned off, until the CPU has been 10 °C under it for a minute. Turning boost off is often the strongest
+  way to cut CPU heat (25 to 30% less power at full load).
+- **Lost CPU temperature:** if the CPU temperature stops reading, fans go to full speed (or BIOS, your choice) and
+  boost goes off until it reads again.
+- **Fan watchdog:** FanKick learns the speed each fan reaches at each setting. A fan that reads far below it (or not
+  at all) is not following FanKick: firmware that dropped the setting after sleep, another program, or a stuck
+  controller. FanKick re-applies control (on ASUS laptops it redoes the whole startup sequence), backs off between
+  tries, and after three failed tries raises an alert and turns CPU boost off. Every step is in the log.
+- **Sleep and wake:** after the machine wakes, FanKick re-applies every fan's setting.
 - **Conflict check:** if another fan or hardware app is running (FanControl, HWiNFO, Armoury Crate, G-Helper, Argus,
   CoolerControl, Macs Fan Control...), FanKick waits for you before touching any hardware.
 - **Never wakes a sleeping laptop GPU** just to read its temperature.

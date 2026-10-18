@@ -16,6 +16,8 @@ public sealed class FanSettings
     // How fast the speed may move, in % per second, so a short spike doesn't make the fans roar.
     public float StepUp { get; set; } = 10;
     public float StepDown { get; set; } = 3;
+    // Learned by the fan watchdog: the rpm this fan reaches at each 10% step (key 0..10). A fan far below it is stuck.
+    public Dictionary<int, int> Rpm { get; set; } = [];
 }
 
 public enum Corner { TopLeft, TopRight, BottomLeft, BottomRight }
@@ -37,6 +39,9 @@ public sealed class Settings
     public Dictionary<string, FanSettings> Fans { get; set; } = [];
     // Any CPU/GPU core at or over this: every fan to 100% until 10 °C under it, whatever the curves say.
     public int PanicTemp { get; set; } = 95;
+    // CPU at or over this for 6 s: every fan to 100% and CPU boost off, until it has been 10 °C under for a minute.
+    // 0 = off.
+    public int CpuLimit { get; set; } = 90;
     public FailSafe OnSensorLost { get; set; } = FailSafe.FullSpeed;
     public FailSafe OnCrash { get; set; } = FailSafe.FullSpeed;
     public FailSafe OnExit { get; set; } = FailSafe.Bios;

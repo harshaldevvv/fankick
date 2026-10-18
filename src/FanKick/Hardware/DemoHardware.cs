@@ -24,7 +24,7 @@ public sealed class DemoHardware : IHardware
     public DemoHardware()
     {
         const string cpu = "Ryzen 7 7800X3D", gpu = "Radeon RX 7800 XT", board = "Nuvoton NCT6799D", aio = "Liquid cooler", disk = "NVMe SSD";
-        cpuT = Add(new Sensor("demo/cpu/temp", "CPU Package", cpu, SensorKind.Temperature) { Critical = true });
+        cpuT = Add(new Sensor("demo/cpu/temp", "CPU Package", cpu, SensorKind.Temperature) { Critical = true, Cpu = true });
         cpuLoad = Add(new Sensor("demo/cpu/load", "CPU Total", cpu, SensorKind.Load));
         cpuW = Add(new Sensor("demo/cpu/power", "CPU Package", cpu, SensorKind.Power));
         cpuClk = Add(new Sensor("demo/cpu/clock", "Core average", cpu, SensorKind.Clock));
