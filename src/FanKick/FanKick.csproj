@@ -8,8 +8,14 @@
     <AssemblyName>FanKick</AssemblyName>
     <RootNamespace>FanKick</RootNamespace>
     <Version>0.1.0</Version>
+    <!-- Shown by Windows as the file's publisher and description (Task Manager, Properties, Apps). -->
     <Product>FanKick</Product>
-    <Copyright>FanKick contributors</Copyright>
+    <AssemblyTitle>FanKick</AssemblyTitle>
+    <Description>Fan and thermal control for Windows, macOS and Linux.</Description>
+    <Company>harshal.dev</Company>
+    <Authors>harshal.dev</Authors>
+    <Copyright>Copyright (c) 2026 Harshal Narkhede (harshal.dev). MIT License.</Copyright>
+    <NeutralLanguage>en</NeutralLanguage>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\fankick.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>

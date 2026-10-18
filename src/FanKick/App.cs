@@ -1,0 +1,183 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Platform;
+using Avalonia.Styling;
+using Avalonia.Themes.Fluent;
+using Avalonia.Threading;
+using FanKick.Core;
+using FanKick.Hardware;
+using FanKick.Modes;
+using FanKick.Stress;
+using FanKick.UI;
+
+namespace FanKick;
+
+public sealed class App : Application
+{
+    public Settings Settings { get; private set; } = new();
+    public Core.Engine? Engine { get; private set; }
+    public List<ModeGroup> Modes { get; } = [];
+    public List<string> Conflicts { get; private set; } = [];
+    public StressTest Stress { get; } = new();
+    public bool Quitting { get; private set; }
+    public string? HotkeyError { get; private set; }
+
+    MainWindow? window;
+    OverlayWindow? overlay;
+    DispatcherTimer? saveTimer;
+    string SettingsPath => Program.Demo ? Path.Combine(Settings.Dir, "settings-demo.json") : Settings.DefaultPath;
+    static string ShowName => Program.Demo ? "FanKick.App.Demo.Show" : "FanKick.App.Show";
+
+    public static WindowIcon Icon => new(AssetLoader.Open(new Uri("avares://FanKick/Assets/fankick.png")));
+
+    public override void Initialize()
+    {
+        Styles.Add(new FluentTheme());
+        RequestedThemeVariant = ThemeVariant.Dark;
+    }
+
+    public override void OnFrameworkInitializationCompleted()
+    {
+        var life = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
+        Settings = Settings.Load(SettingsPath);
+        if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = Settings.AsusWriteTwice;
+        Modes.AddRange(Program.Demo ? DemoHardware.Modes() : PerfModes.Detect());
+        Conflicts = Program.Demo ? [] : Backends.Conflicts();
+        if (Conflicts.Count == 0) StartEngine();
+        else Log.Write("waiting: other fan/hardware apps running: " + string.Join(", ", Conflicts));
+
+        window = new MainWindow(this);
+        overlay = new OverlayWindow(this);
+        BuildTray();
+        ApplyOverlay();
+        ApplyHotkey();
+        ListenForShow();
+        life.ShutdownRequested += (_, _) => Shutdown(); // logoff / OS shutdown
+        if (!Program.Minimized) window.Show();
+        if (Program.ScreenshotDir is { } dir) _ = window.CaptureScreenshots(dir, overlay).ContinueWith(_ => Dispatcher.UIThread.Post(Quit));
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    public void StartEngine()
+    {
+        if (Engine != null) return;
+        var hw = Backends.Create(Program.Demo, Modes);
+        Engine = new Core.Engine(hw, Settings);
+        if (Program.Demo)
+        {
+            if (!File.Exists(SettingsPath)) foreach (var fs in Settings.Fans.Values) { fs.Mode = FanMode.Curve; fs.Curve = "Balanced"; }
+            for (int i = 0; i < 240; i++) { Engine.Refresh(); Engine.Tick(1); } // fill the graphs
+        }
+        Engine.Start();
+        Log.Write($"engine: {hw.Count} backend(s), {Engine.Sensors.Count} sensors, {Engine.Fans.Count} fans: " + string.Join(", ", Engine.Fans.Select(f => f.Name)));
+        if (!Program.Demo && Engine.Fans.Count > 0 && !OperatingSystem.IsMacOS()) Guard.Spawn();
+        window?.Rebuild();
+        Conflicts = [];
+    }
+
+    // Settings changes are saved a second after the last edit.
+    public void Save()
+    {
+        saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
+        {
+            saveTimer!.Stop();
+            try { lock (Settings) Settings.Save(SettingsPath); } catch (Exception ex) { Log.Write("save: " + ex.Message); }
+        });
+        saveTimer.Stop();
+        saveTimer.Start();
+    }
+
+    public void ApplyPreset(string name)
+    {
+        lock (Settings)
+        {
+            if (name != "BIOS" && Settings.Find(name) == null) Settings.Curves.Add(Presets.Build(name));
+            foreach (var fs in Settings.Fans.Values)
+            {
+                fs.Mode = name == "BIOS" ? FanMode.Auto : FanMode.Curve;
+                if (name != "BIOS") fs.Curve = name;
+            }
+        }
+        Log.Write("preset: " + name);
+        Save();
+        window?.Rebuild();
+    }
+
+    public void ApplyOverlay()
+    {
+        if (overlay == null) return;
+        if (Settings.Overlay.Enabled && Engine != null) { overlay.Show(); overlay.Refresh(); }
+        else overlay.Hide();
+    }
+
+    public void ToggleOverlay()
+    {
+        Settings.Overlay.Enabled = !Settings.Overlay.Enabled;
+        ApplyOverlay();
+        Save();
+        window?.Rebuild();
+    }
+
+    public void ApplyHotkey() =>
+        HotkeyError = Platform.SetHotkey(Settings.Overlay.Hotkey, () => Dispatcher.UIThread.Post(ToggleOverlay));
+
+    public void ShowWindow()
+    {
+        if (window == null) return;
+        window.Show();
+        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
+    }
+
+    void BuildTray()
+    {
+        var menu = new NativeMenu();
+        void Item(NativeMenu m, string text, Action a) { var i = new NativeMenuItem(text); i.Click += (_, _) => a(); m.Add(i); }
+        Item(menu, "Open FanKick", ShowWindow);
+        Item(menu, "Overlay on/off", ToggleOverlay);
+        var presets = new NativeMenu();
+        foreach (var p in Presets.Names.Append("BIOS")) Item(presets, p, () => ApplyPreset(p));
+        menu.Add(new NativeMenuItem("Fan preset") { Menu = presets });
+        menu.Add(new NativeMenuItemSeparator());
+        Item(menu, "Quit", Quit);
+        var tray = new TrayIcon { Icon = Icon, ToolTipText = "FanKick", Menu = menu };
+        tray.Clicked += (_, _) => ShowWindow();
+        TrayIcon.SetIcons(this, [tray]);
+    }
+
+    // A second launch asks this one to show its window (Windows; elsewhere the second launch just exits).
+    void ListenForShow()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowName);
+        new Thread(() => { while (ev.WaitOne()) Dispatcher.UIThread.Post(ShowWindow); }) { IsBackground = true }.Start();
+    }
+
+    public static void SignalShow()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try { EventWaitHandle.OpenExisting(ShowName).Set(); } catch { }
+    }
+
+    public void Quit()
+    {
+        Quitting = true;
+        Shutdown();
+        ((IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!).Shutdown();
+    }
+
+    bool shutDown;
+    void Shutdown()
+    {
+        if (shutDown) return;
+        shutDown = true;
+        Stress.Stop();
+        try { lock (Settings) Settings.Save(SettingsPath); } catch { }
+        var e = Engine;
+        Engine = null;
+        e?.Dispose(); // fans back to the BIOS (or full speed), as set in Settings > Safety
+        Guard.MarkCleanExit();
+        Log.Write("clean exit");
+    }
+}

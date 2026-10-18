@@ -42,11 +42,15 @@ public sealed class Settings
     public FailSafe OnExit { get; set; } = FailSafe.Bios;
     public int IntervalMs { get; set; } = 1000;
     public OverlaySettings Overlay { get; set; } = new();
+    // ASUS laptops whose BIOS flips the custom fan curve at every write (see AsusAcpi).
+    public bool AsusWriteTwice { get; set; }
 
     public FanSettings Fan(string id) => Fans.TryGetValue(id, out var f) ? f : Fans[id] = new FanSettings();
     public Curve? Find(string? name) => Curves.FirstOrDefault(c => c.Name == name);
 
-    public static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), "FanKick");
+    // %APPDATA%\FanKick, ~/.config/FanKick, or ~/Library/Application Support/FanKick on a Mac.
+    public static readonly string Dir = Path.Combine(Environment.GetFolderPath(
+        OperatingSystem.IsMacOS() ? Environment.SpecialFolder.LocalApplicationData : Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), "FanKick");
     public static string DefaultPath => Path.Combine(Dir, "settings.json");
 
     static readonly JsonSerializerOptions Json = new()

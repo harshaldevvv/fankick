@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FanKick
+GenericName=Fan control
+Comment=Fan and thermal control: every fan and sensor, curves, modes, stress test
+Exec=fankick
+Icon=fankick
+Categories=System;Monitor;Utility;
+Keywords=fan;temperature;thermal;cooling;sensors;
+Terminal=false

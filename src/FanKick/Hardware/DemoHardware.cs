@@ -1,4 +1,5 @@
 using FanKick.Core;
+using FanKick.Modes;
 
 namespace FanKick.Hardware;
 
@@ -46,7 +47,7 @@ public sealed class DemoHardware : IHardware
     void AddFan(string id, string name, string group, int maxRpm)
     {
         var rpm = Add(new Sensor(id + "/rpm", name, group, SensorKind.Fan));
-        var duty = Add(new Sensor(id + "/duty", name, group, SensorKind.Control));
+        var duty = Add(new Sensor(id + "/duty", name + " duty", group, SensorKind.Control));
         fans.Add((new FanControl(id, name, group) { RpmSensorId = rpm.Id }, rpm, duty, maxRpm));
     }
 
@@ -75,6 +76,19 @@ public sealed class DemoHardware : IHardware
             duty.Value = Duty(i);
             rpm.Value = Duty(i) < 15 ? 0 : max * Duty(i) / 100 + rng.Next(-15, 16);
         }
+    }
+
+    // Pretend OS modes, held in memory.
+    public static IEnumerable<ModeGroup> Modes()
+    {
+        ModeGroup Make(string title, string[] options, string current, string? note = null)
+        {
+            string v = current;
+            return new ModeGroup(title, options, () => v, x => v = x) { Note = note };
+        }
+        yield return Make("Power profile", ["Power saver", "Balanced", "Performance"], "Balanced", "The OS power profile.");
+        yield return Make("Platform profile", ["quiet", "balanced", "performance"], "balanced", "The firmware's thermal profile.");
+        yield return Make("CPU boost", ["Off", "On"], "On", "Turbo clocks. Off is the strongest way to cut CPU heat.");
     }
 
     public void Set(FanControl fan, int percent) { }
