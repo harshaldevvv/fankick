@@ -37,7 +37,9 @@ public sealed class Engine : IDisposable
         foreach (var h in hardware) foreach (var f in h.Fans) owner[f] = h;
         Fans = owner.Keys.ToList();
         foreach (var f in Fans) settings.Fan(f.Id); // create every entry now: the loop must never grow the dictionary
-        Notices = hardware.Select(h => h.Notice).OfType<string>().ToList();
+        Notices = hardware.Length == 0
+            ? ["FanKick couldn't open any hardware on this machine. The reason is in FanKick.log, in the settings folder."]
+            : hardware.Select(h => h.Notice).OfType<string>().ToList();
     }
 
     public float Read(string id) => byId.TryGetValue(id, out var s) ? s.Value : float.NaN;
