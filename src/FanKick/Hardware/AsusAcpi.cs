@@ -1,0 +1,136 @@
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using FanKick.Core;
+using FanKick.Modes;
+using Microsoft.Win32.SafeHandles;
+
+namespace FanKick.Hardware;
+
+// ASUS laptops (ROG, TUF, Zenbook, Vivobook) on Windows, through the same ATKACPI driver path G-Helper uses: no extra
+// driver beyond ASUS's own ATK package. Fans are driven by writing a flat 8-point fan curve (every point at our %),
+// so the embedded controller runs the fan at exactly that speed whatever temperature it sees. Also the ASUS
+// performance mode (Silent / Balanced / Turbo) and the battery charge limit.
+[SupportedOSPlatform("windows")]
+public sealed class AsusAcpi : Core.IHardware
+{
+    const uint Ioctl = 0x0022240C, Dsts = 0x53545344, Devs = 0x53564544;
+    const uint ModeDev = 0x00120075, ChargeDev = 0x00120057;
+    static readonly (string name, uint curve, uint rpm)[] Known = [("CPU fan", 0x00110024, 0x00110013), ("GPU fan", 0x00110025, 0x00110014), ("Mid fan", 0x00110032, 0x00110031)];
+    static readonly string[] ModeNames = ["Balanced", "Turbo", "Silent"]; // firmware values 0, 1, 2
+
+    // Some BIOS versions (seen on a G513QE, BIOS 331) flip the fan's custom curve on/off at every write instead of
+    // just setting it; there a speed change must be written twice. Off by default; Settings > ASUS turns it on.
+    public static bool WriteTwice { get; set; }
+
+    readonly SafeFileHandle handle;
+    readonly object gate = new();
+    readonly List<Sensor> sensors = [];
+    readonly List<FanControl> fans = [];
+    readonly Dictionary<FanControl, (uint curve, uint rpm, Sensor rpmSensor)> devs = [];
+    int mode;
+
+    public string Name => "ASUS ACPI";
+    public string? Notice => null;
+    public IReadOnlyList<Sensor> Sensors => sensors;
+    public IReadOnlyList<FanControl> Fans => fans;
+
+    AsusAcpi(SafeFileHandle h)
+    {
+        handle = h;
+        foreach (var (name, curve, rpm) in Known)
+        {
+            var buf = Call(Dsts, Args(curve));
+            if (buf.Take(16).All(b => b == 0)) continue; // no stored curve = no such fan
+            var s = new Sensor($"asus/{curve:x}/rpm", name, "ASUS", SensorKind.Fan);
+            var f = new FanControl($"asus/{curve:x}", name, "ASUS") { RpmSensorId = s.Id };
+            sensors.Add(s);
+            fans.Add(f);
+            devs[f] = (curve, rpm, s);
+        }
+    }
+
+    public static AsusAcpi? TryOpen()
+    {
+        var h = CreateFile(@"\\.\ATKACPI", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (h.IsInvalid) return null;
+        try
+        {
+            var a = new AsusAcpi(h);
+            if (a.fans.Count > 0) return a;
+        }
+        catch (Exception ex) { Log.Write("ASUS ACPI: " + ex.Message); }
+        h.Dispose();
+        return null;
+    }
+
+    public IEnumerable<ModeGroup> Modes()
+    {
+        yield return new ModeGroup("ASUS mode", ModeNames, () => ModeNames[mode], v =>
+        {
+            mode = Math.Max(0, Array.IndexOf(ModeNames, v));
+            Call(Devs, Args(ModeDev, (uint)mode));
+            Thread.Sleep(500);
+            Reapply(); // a mode change switches custom fan curves off
+        }) { Note = "The same firmware modes as Armoury Crate. Fans you set in FanKick stay under FanKick's control." };
+        string? charge = null;
+        yield return new ModeGroup("Battery charge limit", ["100%", "80%", "60%"], () => charge, v =>
+        {
+            Call(Devs, Args(ChargeDev, uint.Parse(v.TrimEnd('%'))));
+            charge = v;
+        }) { Note = "Stops charging at this level to slow battery wear. The firmware can't report it back, so it shows blank until set." };
+    }
+
+    void Reapply()
+    {
+        foreach (var f in fans.Where(f => f.Percent >= 0)) Write(devs[f].curve, f.Percent, 1);
+    }
+
+    public void Update()
+    {
+        foreach (var (curve, rpm, s) in devs.Values)
+            s.Value = (BitConverter.ToUInt32(Call(Dsts, Args(rpm)), 0) & 0xFFFF) * 100;
+    }
+
+    public void Set(FanControl fan, int percent) => Write(devs[fan].curve, percent, fan.Percent < 0 || !WriteTwice ? 1 : 2);
+
+    // Flat curve: temperatures 0..70 °C, all at pct. The first point must be 0 °C, the temperature the EC sees for a
+    // sensor it can't read.
+    void Write(uint curve, int pct, int times)
+    {
+        var a = new byte[20];
+        BitConverter.GetBytes(curve).CopyTo(a, 0);
+        for (int i = 0; i < 8; i++) { a[4 + i] = (byte)(i * 10); a[12 + i] = (byte)Math.Clamp(pct, 0, 100); }
+        for (int i = 0; i < times; i++) { if (i > 0) Thread.Sleep(300); Call(Devs, a); }
+    }
+
+    // Re-writing the mode turns every custom curve off (back to the firmware's own); the other fans then get theirs back.
+    public void Restore(FanControl fan)
+    {
+        fan.Percent = -1;
+        Call(Devs, Args(ModeDev, (uint)mode));
+        Thread.Sleep(500);
+        Reapply();
+    }
+
+    public void Dispose() => handle.Dispose();
+
+    static byte[] Args(params uint[] v) => v.SelectMany(BitConverter.GetBytes).ToArray();
+
+    byte[] Call(uint method, byte[] args)
+    {
+        var buf = new byte[8 + args.Length];
+        BitConverter.GetBytes(method).CopyTo(buf, 0);
+        BitConverter.GetBytes((uint)args.Length).CopyTo(buf, 4);
+        args.CopyTo(buf, 8);
+        var outBuf = new byte[32];
+        lock (gate)
+            if (!DeviceIoControl(handle, Ioctl, buf, buf.Length, outBuf, outBuf.Length, out _, IntPtr.Zero))
+                throw new IOException("ATKACPI call failed, error " + Marshal.GetLastWin32Error());
+        return outBuf;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DeviceIoControl(SafeFileHandle h, uint code, byte[] inBuf, int inSize, byte[] outBuf, int outSize, out int ret, IntPtr ov);
+}
