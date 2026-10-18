@@ -38,6 +38,11 @@ public sealed class Engine : IDisposable
         foreach (var h in hardware) foreach (var f in h.Fans) owner[f] = h;
         Fans = owner.Keys.ToList();
         foreach (var f in Fans) settings.Fan(f.Id); // create every entry now: the loop must never grow the dictionary
+        foreach (var f in Fans)
+        {
+            var fs = settings.Fan(f.Id);
+            Log.Write($"fan {f.Id} ({f.Name}): {fs.Mode}{fs.Mode switch { FanMode.Fixed => $" {fs.Fixed}%", FanMode.Curve => $" \"{fs.Curve}\"", _ => "" }}");
+        }
         Notices = hardware.Length == 0
             ? ["FanKick couldn't open any hardware on this machine. The reason is in FanKick.log, in the settings folder."]
             : hardware.Select(h => h.Notice).OfType<string>().ToList();
@@ -150,7 +155,7 @@ public sealed class Engine : IDisposable
                         if (full) { target = 100; now = true; }
                     }
                 }
-                if (target is { } t && !now) t = Math.Clamp(t, fs.Min, Math.Max(fs.Min, fs.Max));
+                if (target is { } t && !now) target = Math.Clamp(t, fs.Min, Math.Max(fs.Min, fs.Max));
                 Apply(fan, target, now, fs, seconds);
                 CheckStall(fan, alerts);
             }
@@ -171,7 +176,7 @@ public sealed class Engine : IDisposable
         if (target is not { } t)
         {
             if (fan.Percent == -1) return;
-            try { hw.Restore(fan); } catch (Exception ex) { Log.Write($"{fan.Name}: restore failed: {ex.Message}"); }
+            try { hw.Restore(fan); Log.Write($"{fan.Name} -> BIOS"); } catch (Exception ex) { Log.Write($"{fan.Name}: restore failed: {ex.Message}"); }
             fan.Percent = -1;
             level.Remove(fan);
             return;
@@ -184,6 +189,7 @@ public sealed class Engine : IDisposable
         try
         {
             hw.Set(fan, pct);
+            if (fan.Percent < 0 || Math.Abs(pct - fan.Percent) >= 10 || pct == 100) Log.Write($"{fan.Name} -> {pct}%");
             fan.Percent = pct;
             failures[fan] = 0;
         }

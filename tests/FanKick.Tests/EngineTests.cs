@@ -170,3 +170,25 @@ public class EngineTests
         File.Delete(path);
     }
 }
+
+public class SettingsFileTests
+{
+    [Fact]
+    public void Hand_written_settings_load()
+    {
+        var path = Path.GetTempFileName();
+        File.WriteAllText(path, """
+            { "Fans": { "asus/110024": { "Mode": "Fixed", "Fixed": 100 } }, "OnExit": "FullSpeed", "Modes": { "ASUS mode": "Turbo" } }
+            """);
+        var s = Settings.Load(path);
+        Assert.Equal(FanMode.Fixed, s.Fans["asus/110024"].Mode);
+        Assert.Equal(FailSafe.FullSpeed, s.OnExit);
+        Assert.Equal("Turbo", s.Modes["ASUS mode"]);
+        var hw = new FakeHardware();
+        s.Fans["fan"] = s.Fans["asus/110024"];
+        var e = new Engine([hw], s);
+        e.Refresh(); e.Tick(1);
+        Assert.Equal(100, hw.Fan.Percent);
+        File.Delete(path);
+    }
+}

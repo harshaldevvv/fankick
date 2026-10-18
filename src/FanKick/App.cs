@@ -41,6 +41,7 @@ public sealed class App : Application
     {
         var life = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         Settings = Settings.Load(SettingsPath);
+        Log.Write($"settings: {SettingsPath} ({(File.Exists(SettingsPath) ? "found" : "new")}), {Settings.Fans.Count} fan entries, {Settings.Curves.Count} curves");
         if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = Settings.AsusWriteTwice;
         Modes.AddRange(Program.Demo ? DemoHardware.Modes() : PerfModes.Detect());
         Conflicts = Program.Demo ? [] : Backends.Conflicts();
