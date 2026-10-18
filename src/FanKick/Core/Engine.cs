@@ -27,6 +27,9 @@ public sealed class Engine : IDisposable
     sealed class Watch
     {
         public DateTime Changed;
+        // Seconds to wait after Changed before judging: longer when the fan starts from standstill or after a re-apply
+        // (ASUS fans take most of a minute to climb back after a mode write).
+        public double Grace = 30;
         public DateTime? SlowSince, OkSince;
         public DateTime NextTry;
         public int Tries;
@@ -150,7 +153,7 @@ public sealed class Engine : IDisposable
             }
             catch (Exception ex) { Log.Write($"{h.Name}: resume failed: {ex.Message}"); }
         var t = Now();
-        foreach (var w in watch.Values) { w.Changed = t; w.SlowSince = null; }
+        foreach (var w in watch.Values) { w.Changed = t; w.Grace = 60; w.SlowSince = null; }
     }
 
     public static float Step(float current, float target, float up, float down, double seconds)
@@ -233,7 +236,10 @@ public sealed class Engine : IDisposable
         try
         {
             hw.Set(fan, pct);
-            W(fan, clock).Changed = clock;
+            var wt = W(fan, clock);
+            wt.Changed = clock;
+            // A fan we just started from standstill can take a minute to spin up.
+            wt.Grace = fan.RpmSensorId is { } rid && Read(rid) < 100 ? 75 : 30;
             if (fan.Percent < 0 || Math.Abs(pct - fan.Percent) >= 10 || pct == 100) Log.Write($"{fan.Name} -> {pct}%");
             fan.Percent = pct;
             failures[fan] = 0;
@@ -315,7 +321,7 @@ public sealed class Engine : IDisposable
             return;
         }
         w.OkSince = null;
-        if (settled < (rpm < 100 ? 75 : 30)) return; // a fan starting from standstill can take a minute
+        if (settled < w.Grace) return;
         w.SlowSince ??= clock;
         if (w.Tries >= 3)
             alerts.Add($"{fan.Name} isn't following FanKick: {rpm:F0} rpm at {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}. CPU boost is off until it does. If it started after sleep, hibernating or shutting down fully (not restarting) resets the fan controller on some laptops.");
@@ -324,11 +330,23 @@ public sealed class Engine : IDisposable
         Log.Write($"watchdog: {fan.Name} at {rpm:F0} rpm for {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}: re-applying (try {w.Tries})");
         try
         {
-            if (owner[fan] is IResumable r) r.Resume();
+            if (owner[fan] is IResumable r)
+            {
+                r.Resume();
+                // That redid every fan of this backend: give them all time to climb back before judging them.
+                foreach (var f in owner.Where(o => o.Value == owner[fan]).Select(o => o.Key))
+                {
+                    var wf = W(f, clock);
+                    wf.Changed = clock;
+                    wf.Grace = 60;
+                    wf.SlowSince = null;
+                }
+            }
             else owner[fan].Set(fan, fan.Percent);
         }
         catch (Exception ex) { Log.Write($"watchdog: {fan.Name}: {ex.Message}"); }
         w.Changed = clock;
+        w.Grace = 60;
         w.SlowSince = null;
         w.NextTry = clock.AddSeconds(Math.Min(600, 60 << Math.Min(w.Tries - 1, 4)));
     }

@@ -136,11 +136,12 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
         foreach (var (f, pct) in wanted.ToList()) Apply(f, pct);
     }
 
-    // After standby the firmware may have dropped our curves: redo the startup sequence (mode, then every curve).
+    // After standby (or when the watchdog finds a fan not following) the firmware may have dropped our curves: redo the
+    // startup sequence (mode, then every curve).
     public void Resume()
     {
         lock (op) { WriteMode(mode); Reapply(); }
-        Log.Write("ASUS ACPI: mode and fan curves re-applied after standby");
+        Log.Write("ASUS ACPI: mode and fan curves re-applied");
     }
 
     public void Update()

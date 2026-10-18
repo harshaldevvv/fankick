@@ -54,6 +54,7 @@ public sealed class App : Application
         ApplyOverlay();
         ApplyHotkey();
         ListenForShow();
+        WatchSettingsFile();
         life.ShutdownRequested += (_, _) => Shutdown(); // logoff / OS shutdown
         if (!Program.Minimized) window.Show();
         if (Program.ScreenshotDir is { } dir) _ = window.CaptureScreenshots(dir, overlay).ContinueWith(_ => Dispatcher.UIThread.Post(Quit));
@@ -116,10 +117,44 @@ public sealed class App : Application
         saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
             saveTimer!.Stop();
-            try { lock (Settings) Settings.Save(SettingsPath); } catch (Exception ex) { Log.Write("save: " + ex.Message); }
+            try { lock (Settings) Settings.Save(SettingsPath); ownSave = DateTime.UtcNow; } catch (Exception ex) { Log.Write("save: " + ex.Message); }
         });
         saveTimer.Stop();
         saveTimer.Start();
+    }
+
+    // settings.json edited outside FanKick (by hand, or by another tool): load it, a moment after the last change.
+    DateTime ownSave;
+    DispatcherTimer? reloadTimer;
+    void WatchSettingsFile()
+    {
+        if (Program.Demo) return;
+        try
+        {
+            var w = new FileSystemWatcher(Settings.Dir, "settings.json") { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size };
+            FileSystemEventHandler on = (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                reloadTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { reloadTimer!.Stop(); Reload(); });
+                reloadTimer.Stop();
+                reloadTimer.Start();
+            });
+            w.Changed += on;
+            w.Created += on;
+            w.Renamed += (s, e) => on(s, e);
+            w.EnableRaisingEvents = true;
+        }
+        catch (Exception ex) { Log.Write("can't watch the settings file: " + ex.Message); }
+    }
+
+    void Reload()
+    {
+        if ((DateTime.UtcNow - ownSave).TotalSeconds < 3 || saveTimer?.IsEnabled == true) return; // our own save
+        if (Settings.TryLoad(SettingsPath) is not { } fresh) return;
+        lock (Settings) Settings.CopyFrom(fresh);
+        if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = Settings.AsusWriteTwice;
+        Log.Write($"settings reloaded (changed outside FanKick): CPU limit {Settings.CpuLimit} °C, panic {Settings.PanicTemp} °C");
+        ApplyOverlay();
+        window?.Rebuild();
     }
 
     public void ApplyPreset(string name)

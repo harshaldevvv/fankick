@@ -72,6 +72,21 @@ public sealed class Settings
         catch (Exception ex) { Log.Write("bad settings file, using defaults: " + ex.Message); return new(); }
     }
 
+    // For reloading a file changed outside FanKick: null (keep what we have) if it is missing or doesn't parse.
+    public static Settings? TryLoad(string path)
+    {
+        try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(path), Json); }
+        catch (Exception ex) { Log.Write("settings file changed but can't be read, keeping the current settings: " + ex.Message); return null; }
+    }
+
+    // Take every value from another copy (the engine keeps its reference to this object).
+    public void CopyFrom(Settings o)
+    {
+        Curves = o.Curves; Fans = o.Fans; PanicTemp = o.PanicTemp; CpuLimit = o.CpuLimit;
+        OnSensorLost = o.OnSensorLost; OnCrash = o.OnCrash; OnExit = o.OnExit; IntervalMs = o.IntervalMs;
+        Overlay = o.Overlay; Modes = o.Modes; AsusWriteTwice = o.AsusWriteTwice;
+    }
+
     // Write to a temp file then swap, so a crash mid-save never leaves a half file.
     public void Save(string path)
     {

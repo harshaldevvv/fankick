@@ -284,6 +284,22 @@ public class SafetyTests
     }
 
     [Fact]
+    public void Watchdog_acts_within_40_s_on_a_spinning_fan_that_stops()
+    {
+        hw.Rpm.Value = 4800;
+        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 80 });
+        Run(31);
+        hw.Rpm.Value = 0;                                      // the firmware took it (as after a long standby)
+        Run(9);
+        Assert.DoesNotContain("resume", hw.Calls);
+        Run(2);
+        Assert.Contains("resume", hw.Calls);                  // 30 s grace from the last write is long past
+        hw.Rpm.Value = 2500;                                   // climbing back: must not be judged for 60 s
+        Run(50);
+        Assert.Single(hw.Calls, c => c == "resume");
+    }
+
+    [Fact]
     public void Cpu_limit_forces_full_speed_until_ten_under_for_a_minute()
     {
         Make(s => { s.CpuLimit = 80; s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 }; });
