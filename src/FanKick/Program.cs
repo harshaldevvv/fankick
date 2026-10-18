@@ -56,19 +56,21 @@ static class Program
 static class Guard
 {
     static string Marker(int pid) => Path.Combine(Settings.Dir, $"clean-exit-{pid}");
+    static bool spawned;
 
     public static void Spawn()
     {
         try
         {
             Process.Start(new ProcessStartInfo(Environment.ProcessPath!, $"--guard {Environment.ProcessId}") { UseShellExecute = false, CreateNoWindow = true });
+            spawned = true;
         }
         catch (Exception ex) { Log.Write("guard: could not start: " + ex.Message); }
     }
 
     public static void MarkCleanExit()
     {
-        try { File.WriteAllText(Marker(Environment.ProcessId), ""); } catch { }
+        if (spawned) try { File.WriteAllText(Marker(Environment.ProcessId), ""); } catch { }
     }
 
     public static int Run(int pid)

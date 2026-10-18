@@ -3,6 +3,13 @@ using Xunit;
 
 namespace FanKick.Tests;
 
+static class TestSetup
+{
+    // Keep test runs out of the real FanKick.log.
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void Init() => Log.Path = Path.Combine(Path.GetTempPath(), "FanKick-tests.log");
+}
+
 sealed class FakeHardware : IHardware
 {
     public readonly Sensor Cpu = new("cpu", "CPU", "cpu", SensorKind.Temperature) { Critical = true, Value = 50 };
