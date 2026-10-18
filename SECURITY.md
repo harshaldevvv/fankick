@@ -12,5 +12,6 @@ You should get a reply within a week.
 
 - FanKick ships no kernel driver of its own. On Windows it uses the signed PawnIO driver through
   LibreHardwareMonitorLib, and ASUS's own ATKACPI driver on ASUS laptops. It never uses WinRing0.
-- It opens no network ports and makes no network connections.
+- It opens no network ports. Its only network request is the PawnIO download you start yourself, which is
+  checked against PawnIO's published SHA-256 before it runs.
 - Release builds are produced by GitHub Actions from the tagged source; checksums are attached to each release.

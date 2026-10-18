@@ -137,7 +137,18 @@ sealed class MainWindow : Window
             foreach (var n in e.Notices) box.Children.Add(Banner(n, false));
             if (e.Alert != null) box.Children.Add(Banner(e.Alert, true));
             if (!Platform.IsAdmin && !Program.Demo)
-                box.Children.Add(Btn("Restart as administrator", () => { if (Platform.RestartAsAdmin("--no-elevate")) app.Quit(); }));
+                box.Children.Add(Btn("Restart as administrator", () => { if (Platform.RestartAsAdmin("--no-elevate --restart")) app.Quit(); }));
+            else if (OperatingSystem.IsWindows() && e.Notices.Any(n => n.Contains("PawnIO")))
+            {
+                var status = Muted("Downloads the official signed installer (hash-checked) and opens it. FanKick restarts afterwards.");
+                box.Children.Add(Row(10, Btn("Install PawnIO", async () =>
+                {
+                    status.Text = "Downloading PawnIO...";
+                    var err = await Platform.InstallPawnIo();
+                    if (err != null) { status.Text = err; return; }
+                    if (Platform.RestartAsAdmin("--no-elevate --restart")) app.Quit();
+                }, true), status));
+            }
         }
         Update();
         refreshers.Add(Update);
@@ -485,7 +496,7 @@ sealed class MainWindow : Window
             system.Children.Add(Labeled("Start at login", Row(8, auto, autoStatus), "Runs as a scheduled task with admin rights, so there is no prompt."));
         }
         if (!Platform.IsAdmin && !Program.Demo)
-            system.Children.Add(Labeled("Permissions", Btn("Restart as administrator", () => { if (Platform.RestartAsAdmin("--no-elevate")) app.Quit(); })));
+            system.Children.Add(Labeled("Permissions", Btn("Restart as administrator", () => { if (Platform.RestartAsAdmin("--no-elevate --restart")) app.Quit(); })));
         if (OperatingSystem.IsWindows() && e.Fans.Any(f => f.Group == "ASUS"))
         {
             var twice = new CheckBox { Content = "Each fan curve write toggles the custom curve (some ROG BIOS versions)", IsChecked = S.AsusWriteTwice };

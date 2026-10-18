@@ -94,6 +94,26 @@ static class Platform
 
     static (int code, string output) Schtasks(string args) => Modes.PerfModes.Run("schtasks.exe", args);
 
+    // ---- PawnIO (Windows): fetch the official signed installer, check its hash, run it so the user sees and accepts it ----
+    const string PawnIoUrl = "https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe";
+    const string PawnIoSha256 = "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032";
+
+    public static async Task<string?> InstallPawnIo()
+    {
+        try
+        {
+            using var http = new HttpClient();
+            var bytes = await http.GetByteArrayAsync(PawnIoUrl);
+            if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)) != PawnIoSha256) return "The download didn't match PawnIO's published checksum, so it was not run.";
+            string path = Path.Combine(Path.GetTempPath(), "PawnIO_setup.exe");
+            await File.WriteAllBytesAsync(path, bytes);
+            using var p = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            if (p != null) await p.WaitForExitAsync();
+            return null;
+        }
+        catch (Exception ex) { Log.Write("PawnIO install: " + ex.Message); return "Couldn't install PawnIO: " + ex.Message; }
+    }
+
     // ---- global hotkey (Windows): a thread with its own message queue receives WM_HOTKEY ----
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint mods, uint vk);
     [DllImport("user32.dll")] static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);

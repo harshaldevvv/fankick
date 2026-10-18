@@ -230,3 +230,34 @@ Later, when there is demand:
 - A signed macOS privileged helper and signed Windows builds (needs paid certificates).
 - Trigger and Auto (target temperature) curve types, RPM calibration.
 - Root daemon + user UI split on Linux (CoolerControl's model) instead of running the UI as root.
+
+## 6. Code signing
+
+Unsigned apps work, but Windows SmartScreen says "Windows protected your PC", the UAC prompt says "Unknown
+publisher", and macOS Gatekeeper refuses to open the app until the user approves it. The README explains how to get
+past each warning. Options for removing them (checked 2026-10-19):
+
+| Option | Cost | Publisher users see | Notes |
+|---|---|---|---|
+| [SignPath Foundation](https://signpath.org) | Free for OSS | "SignPath Foundation" | Needs an OSI license (FanKick: MIT), no proprietary code, an actively maintained project with a release, a code signing policy on the project page, and builds signed from CI (GitHub Actions is supported). The certificate belongs to SignPath, so the publisher is not your name. |
+| [Azure Artifact Signing](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options) (formerly Trusted Signing) | About 9.99 USD/month | Your verified name | Individuals: USA and Canada only (organizations: also EU and UK). Identity check takes a few days. Signs from CI. |
+| [Certum Open Source Code Signing](https://shop.certum.eu/code-signing.html) | Low (roughly 25 to 70 EUR/year; price not confirmed) | "Open Source Developer, your name" | Identity check; cloud signing (SimplySign) needs a phone app, which makes unattended CI signing awkward. Validity periods were shortened from March 2026. |
+| Standard OV certificate (Sectigo, DigiCert, Certum...) | About 120 to 400 USD/year | Your name or company | Cloud HSM or USB token required since 2023. |
+| Apple Developer ID + notarization (macOS) | 99 USD/year | Your name | The only way to remove Gatekeeper's warning. Notarization runs from CI with an App Store Connect API key. |
+
+None of these makes SmartScreen trust a new app on day one: since 2024 even EV certificates build reputation from
+downloads over time. What signing does fix at once: the publisher name in UAC and in file properties, and
+"unknown publisher" warnings.
+
+**Recommendation:**
+- **Windows:** apply to SignPath Foundation first. It is free, made for this case, and FanKick already meets its
+  terms (MIT license, CI builds, public releases). The catch is that the publisher reads "SignPath Foundation", not
+  harshal.dev.
+- If showing your own name matters more than the cost, use Certum Open Source (cheapest with your name). Azure
+  Artifact Signing is the smoothest for CI, but only if you're eligible as an individual (USA or Canada) or sign as
+  a registered organization.
+- **macOS:** notarization needs the 99 USD/year Apple Developer Program. It's worth it only if Mac users turn out to
+  matter; until then the README's right-click > Open steps cover it.
+- **Wiring:** `release.yml` already signs the Windows app and installer when `WINDOWS_CERT_PFX` and
+  `WINDOWS_CERT_PASSWORD` secrets exist (a PFX certificate). SignPath and Azure each have their own GitHub Action,
+  which would replace that step.

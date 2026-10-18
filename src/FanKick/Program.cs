@@ -40,6 +40,8 @@ static class Program
         }
 
         using var single = new Mutex(true, Demo ? "FanKick.App.Demo" : "FanKick.App", out bool first);
+        if (!first && args.Contains("--restart")) // the old copy is on its way out: wait for it
+            try { first = single.WaitOne(TimeSpan.FromSeconds(15)); } catch (AbandonedMutexException) { first = true; }
         if (!first) { App.SignalShow(); return 0; }
         Log.Write($"FanKick {typeof(Program).Assembly.GetName().Version} starting{(Demo ? " (demo)" : "")}, {Environment.OSVersion}, admin={Platform.IsAdmin}");
         AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().LogToTrace()

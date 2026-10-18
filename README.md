@@ -24,6 +24,24 @@ to full speed or back to the BIOS. They are never left stuck.
 Every release is built by GitHub Actions from the tagged source, and lists a SHA-256 checksum for each file
 (`SHA256SUMS.txt`). Nothing else needs installing: the .NET runtime is included.
 
+### First run: the "unknown app" warnings
+
+FanKick is free and not yet code-signed (signing certificates cost money; see
+[docs/RESEARCH.md](docs/RESEARCH.md#6-code-signing)), so your OS will warn you once. That is expected for unsigned
+open source apps. To be sure the file is the real one, compare its SHA-256 with `SHA256SUMS.txt` on the release page.
+
+- **Windows SmartScreen** ("Windows protected your PC"): click **More info**, then **Run anyway**. The admin prompt
+  that follows says "Unknown publisher" for the same reason.
+- **macOS Gatekeeper** ("FanKick can't be opened" or "cannot verify the developer"): open the .dmg, drag FanKick to
+  Applications, then right-click FanKick in Applications and choose **Open**, then **Open** again. On macOS 15 and
+  later, if there is no Open button, go to **System Settings > Privacy & Security** and click **Open Anyway**. Or in
+  Terminal: `xattr -dr com.apple.quarantine /Applications/FanKick.app`
+- **Linux:** `sudo apt install ./fankick_linux_amd64.deb` (or arm64), then start FanKick from your app menu.
+  For the tar.gz: extract it and run `./fankick/FanKick`.
+
+Then FanKick tells you in plain words if it needs anything else (admin rights, or the PawnIO driver on Windows,
+which it can install for you with one click).
+
 ## Features
 
 - **Every fan and sensor.** CPU, NVIDIA/AMD/Intel GPUs, motherboard fan headers, AIO pumps and fan hubs, drives,
@@ -71,8 +89,9 @@ Changing fan speeds is a privileged operation on every OS. Plainly:
 - FanKick asks for **administrator** rights when it starts (or starts with them at sign-in, with no prompt, if you
   ticked "Start at sign-in"). Without admin it still shows GPU readings.
 - **CPU temperatures, motherboard sensors and fan headers** need the **PawnIO** driver, a small signed driver made to
-  replace the old WinRing0 (which Windows Defender now blocks). The installer offers to download and install the
-  official PawnIO installer for you; or get it from [pawnio.eu](https://pawnio.eu). FanKick ships no driver of its own.
+  replace the old WinRing0 (which Windows Defender now blocks). The installer offers to install it, and if it is
+  missing FanKick shows an **Install PawnIO** button: both fetch the official signed PawnIO installer, check its
+  checksum and open it. Or get it yourself from [pawnio.eu](https://pawnio.eu). FanKick ships no driver of its own.
 - **GPUs** (NVIDIA, AMD, Intel) and USB coolers work without PawnIO.
 - **ASUS laptops** use ASUS's own ATKACPI driver (the same path as G-Helper and Armoury Crate).
 - Sensor support comes from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
@@ -132,7 +151,8 @@ No telemetry, no accounts, no network connections. Settings and a small log stay
 
 ## License and disclaimer
 
-FanKick is free software under the [MIT License](LICENSE). Third-party components and their licenses are listed in
+FanKick is free, open source software under the [MIT License](LICENSE). Contributions welcome: see
+[CONTRIBUTING.md](CONTRIBUTING.md). Third-party components and their licenses are listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Report security issues privately as described in
 [SECURITY.md](SECURITY.md).
 
