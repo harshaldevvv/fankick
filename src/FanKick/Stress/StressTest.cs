@@ -41,6 +41,20 @@ public sealed class StressTest
 
     public void Stop() => stop = true;
 
+    // `FanKick --load cpu|gpu|both <seconds>`: only the load, no sensors and no fans (FanKick itself keeps watching
+    // temperatures and fans). For scripted thermal tests.
+    public static void Load(bool cpu, bool gpu, TimeSpan time)
+    {
+        var t = new StressTest { cpuOn = cpu, gpuOn = gpu };
+        var threads = new List<Thread>();
+        if (cpu) for (int i = 0; i < Environment.ProcessorCount; i++) threads.Add(Begin(t.BurnCpu, null));
+        if (gpu) foreach (var d in OpenCl.Gpus()) threads.Add(Begin(o => OpenCl.Burn((IntPtr)o!, () => t.gpuOn), d));
+        Log.Write($"load: {(cpu ? "CPU " : "")}{(gpu ? "GPU " : "")}for {time.TotalSeconds:F0} s on {threads.Count} threads");
+        Thread.Sleep(time);
+        t.cpuOn = t.gpuOn = false;
+        foreach (var th in threads) th.Join(5000);
+    }
+
     static Thread Begin(Action<object?> work, object? arg)
     {
         var t = new Thread(o => work(o)) { IsBackground = true, Priority = ThreadPriority.BelowNormal };

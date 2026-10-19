@@ -22,6 +22,12 @@ static class Program
         if (a >= 0 && a + 1 < args.Length)
             try { Platform.Autostart = args[a + 1] == "on"; return 0; }
             catch (Exception ex) { Log.Write("autostart: " + ex.Message); return 1; }
+        int ld = Array.IndexOf(args, "--load");
+        if (ld >= 0 && ld + 2 < args.Length && int.TryParse(args[ld + 2], out int secs))
+        {
+            Stress.StressTest.Load(args[ld + 1] is "cpu" or "both", args[ld + 1] is "gpu" or "both", TimeSpan.FromSeconds(secs));
+            return 0;
+        }
         if (args.Contains("--probe-asus")) { if (OperatingSystem.IsWindows()) AsusAcpi.Probe(); return 0; }
         int s = Array.IndexOf(args, "--screenshots");
         if (s >= 0 && s + 1 < args.Length) ScreenshotDir = Path.GetFullPath(args[s + 1]);

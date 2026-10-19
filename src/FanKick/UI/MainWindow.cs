@@ -442,6 +442,8 @@ sealed class MainWindow : Window
         if (pw != null) chart.Lines.Add(new("CPU power", () => e.History(pw.Id), Series[3], " W"));
         refreshers.Add(chart.InvalidateVisual);
 
+        var rec = new ToggleSwitch { IsChecked = S.Record, OnContent = "Recording", OffContent = "Off" };
+        rec.IsCheckedChanged += (_, _) => { S.Record = rec.IsChecked == true; app.Save(); };
         return Col(16,
             Box(Col(10,
                 Heading("CPU and GPU load test"),
@@ -449,7 +451,10 @@ sealed class MainWindow : Window
                 Row(16, cpu, gpu),
                 Labeled("Duration", dur),
                 Labeled("Safety cutoff (°C)", cut),
-                Row(12, go, status))),
+                Row(12, go, status),
+                Labeled("Record readings to CSV", Row(8, rec, Btn("Open records folder", () =>
+                    { var d = Path.Combine(Settings.Dir, "records"); Directory.CreateDirectory(d); Launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(d)); })),
+                    "Every reading every 2 s, to compare runs (for example before and after new thermal paste)."))),
             chart);
     }
 

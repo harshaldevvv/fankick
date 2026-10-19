@@ -20,6 +20,8 @@ public sealed class Engine : IDisposable
     volatile bool stop;
     bool lostLogged;
     DateTime lastStatus = DateTime.MinValue;
+    string? recordFile;
+    DateTime lastRecord;
     DateTime? overSince, underSince, cpuMissingSince;
     bool cpuSeen;
 
@@ -217,6 +219,33 @@ public sealed class Engine : IDisposable
                 $"{f.Name} {(f.Percent < 0 ? "BIOS" : f.Percent + "%")}{(f.RpmSensorId is { } r && !float.IsNaN(Read(r)) ? $" {Read(r):F0} rpm" : "")}")));
         }
         Alert = alerts.Count == 0 ? null : string.Join("\n", alerts);
+        Record(clock);
+    }
+
+    // Every reading and every fan's % as one CSV row every 2 s, while Settings.Record is on. A new file per recording.
+    void Record(DateTime clock)
+    {
+        if (!Settings.Record) { if (recordFile != null) Log.Write("recording stopped: " + recordFile); recordFile = null; return; }
+        if ((clock - lastRecord).TotalSeconds < 2) return;
+        lastRecord = clock;
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            if (recordFile == null)
+            {
+                var dir = Path.Combine(Settings.Dir, "records");
+                Directory.CreateDirectory(dir);
+                recordFile = Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd HHmmss", ic) + ".csv");
+                static string Q(string s) => "\"" + s.Replace("\"", "'") + "\"";
+                File.WriteAllText(recordFile, string.Join(",", Sensors.Select(s => Q($"{s.Group} / {s.Name} ({s.Unit})"))
+                    .Prepend("time").Concat(Fans.Select(f => Q($"{f.Name} (% set)")))) + Environment.NewLine,
+                    new System.Text.UTF8Encoding(true)); // with a BOM, so Excel shows °C right
+                Log.Write("recording to " + recordFile);
+            }
+            File.AppendAllText(recordFile, string.Join(",", Sensors.Select(s => float.IsNaN(s.Value) ? "" : s.Value.ToString("0.##", ic))
+                .Prepend(DateTime.Now.ToString("HH:mm:ss", ic)).Concat(Fans.Select(f => f.Percent < 0 ? "" : f.Percent.ToString(ic)))) + Environment.NewLine);
+        }
+        catch (Exception ex) { Log.Write("recording: " + ex.Message); recordFile = null; }
     }
 
     void Apply(FanControl fan, float? target, bool now, FanSettings fs, double seconds, DateTime clock)

@@ -53,6 +53,9 @@ public sealed class Settings
     public OverlaySettings Overlay { get; set; } = new();
     // Performance modes picked in FanKick (group title -> option), set again at every start.
     public Dictionary<string, string> Modes { get; set; } = [];
+    // Write every reading to a CSV file (Settings.Dir/records) every 2 s, for comparing runs (e.g. before and after
+    // a repaste).
+    public bool Record { get; set; }
     // The first-run offer to bring over settings from other fan apps has been answered.
     public bool ImportOffered { get; set; }
     // ASUS laptops whose BIOS flips the custom fan curve at every write (see AsusAcpi).
@@ -90,7 +93,7 @@ public sealed class Settings
     {
         Curves = o.Curves; Fans = o.Fans; PanicTemp = o.PanicTemp; CpuLimit = o.CpuLimit;
         OnSensorLost = o.OnSensorLost; OnCrash = o.OnCrash; OnExit = o.OnExit; IntervalMs = o.IntervalMs;
-        Overlay = o.Overlay; Modes = o.Modes; AsusWriteTwice = o.AsusWriteTwice; ImportOffered = o.ImportOffered;
+        Overlay = o.Overlay; Modes = o.Modes; AsusWriteTwice = o.AsusWriteTwice; ImportOffered = o.ImportOffered; Record = o.Record;
     }
 
     // Write to a temp file then swap, so a crash mid-save never leaves a half file.
