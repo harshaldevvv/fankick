@@ -51,6 +51,9 @@ which it can install for you with one click).
   "Hottest CPU/GPU". Per-curve hysteresis. Mix curves (max, min or average of other curves). Flat curves. Per-fan
   minimum, maximum, step-up and step-down rates. One curve can drive many fans.
 - **Presets:** Silent, Balanced, Performance, Full, and BIOS (hand everything back). Import and export profiles.
+- **Brings over your old settings, if you want:** on first run FanKick looks for FanControl, G-Helper (ASUS) and
+  Linux fancontrol settings, shows what it found and what maps to this PC, and applies nothing unless you pick one.
+  Keeping the BIOS in control is the recommended default.
 - **Performance modes** that match the machine: Windows power plans, the Windows 11 power mode, CPU boost; Linux
   power profiles, platform profile, CPU governor, energy preference, boost; macOS Low/High Power Mode; ASUS
   Silent/Balanced/Turbo and battery charge limit.
