@@ -56,7 +56,7 @@ public sealed class WindowsHardware : Core.IHardware
             };
             bool critical = kind == SensorKind.Temperature && (
                 hw.HardwareType == HardwareType.Cpu && s.Name is "CPU Package" or "Core (Tctl/Tdie)" or "Tctl" or "Tdie" or "Core (Tctl)" ||
-                hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel && s.Name is "GPU Core" or "GPU Hot Spot");
+                hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel && s.Name is "GPU Core");
             var ours = new Sensor(s.Identifier.ToString(), s.Name, hw.Name, kind) { Critical = critical, Cpu = critical && hw.HardwareType == HardwareType.Cpu };
             sensors.Add(ours);
             map.Add((ours, s, top));

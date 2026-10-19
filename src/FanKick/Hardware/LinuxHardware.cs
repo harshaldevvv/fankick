@@ -72,7 +72,7 @@ public sealed class LinuxHardware : IHardware
             string stem = f[..f.IndexOf('_')];
             string label = ReadText($"{dir}/{stem}_label") ?? stem;
             bool critical = kind == SensorKind.Temperature && (chip is "k10temp" or "zenpower" && label is "Tctl" or "Tdie" || chip == "coretemp" && label.StartsWith("Package")
-                            || chip is "amdgpu" or "i915" or "xe" && label is "edge" or "junction" or "temp1" && !label.StartsWith("mem"));
+                            || chip is "amdgpu" or "i915" or "xe" && label is "edge" or "temp1");
             var s = Add(new Sensor($"{id}/{stem}", label, group, kind) { Critical = critical, Cpu = critical && group == "CPU" });
             files.Add((s, $"{dir}/{f}", scale));
         }

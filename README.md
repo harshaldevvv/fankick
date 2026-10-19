@@ -64,30 +64,41 @@ which it can install for you with one click).
 | **Modes** | **Settings** |
 | ![Modes](docs/media/modes.png) | ![Settings](docs/media/settings.png) |
 
-## Safety
+## Defaults and safety
 
-FanKick controls real hardware, so it assumes things will go wrong:
+Out of the box FanKick changes nothing: every fan stays under BIOS control, no performance mode is touched, and the
+overlay and hotkey are off. It only acts on what you set up, plus a last-resort panic rule. Everything below that
+says "opt-in" is off until you turn it on in Settings.
 
-- **Panic temperature** (default 95 °C): any CPU or GPU core at it sends every fan to 100% until it is 10 °C cooler,
-  whatever the curves say.
-- **Lost sensor:** a curve whose sensor stops reading sends its fan to full speed (or to the BIOS, your choice).
-- **Crash guard:** a small watchdog process notices if FanKick dies without a clean exit and sets every fan to full
-  speed (or BIOS). On a Mac the SMC takes the fans back by itself.
+Always on:
+
+- **Panic temperature** (default 100 °C, past every common CPU's throttle point): any CPU or GPU core at it sends
+  every fan to 100% until it is 10 °C cooler, whatever the curves say. GPU hot-spot sensors, which normally read
+  95 to 105 °C, don't count.
+- **Lost sensor:** a curve whose sensor stops reading hands its fan back to the BIOS (or full speed, your choice).
+- **Crash guard:** a small watchdog process notices if FanKick dies without a clean exit and hands every fan back to
+  the BIOS (or full speed). On a Mac the SMC takes the fans back by itself.
 - **Quit:** fans go back to BIOS control (or full speed, your choice).
 - **Failing writes:** three failed writes in a row hand that fan back to the BIOS.
-- **CPU temperature limit** (default 90 °C, on by default): at or over it for 6 seconds, every fan goes to 100% and CPU
-  boost is turned off, until the CPU has been 10 °C under it for a minute. Turning boost off is often the strongest
-  way to cut CPU heat (25 to 30% less power at full load).
-- **Lost CPU temperature:** if the CPU temperature stops reading, fans go to full speed (or BIOS, your choice) and
-  boost goes off until it reads again.
-- **Fan watchdog:** FanKick learns the speed each fan reaches at each setting. A fan that reads far below it (or not
-  at all) is not following FanKick: firmware that dropped the setting after sleep, another program, or a stuck
-  controller. FanKick re-applies control (on ASUS laptops it redoes the whole startup sequence), backs off between
-  tries, and after three failed tries raises an alert and turns CPU boost off. Every step is in the log.
+- **Fan watchdog:** for fans FanKick drives, it learns the speed each one reaches at each setting. A fan that reads
+  far below it (or not at all) is not following FanKick: firmware that dropped the setting after sleep, another
+  program, or a stuck controller. FanKick re-applies control, backs off between tries, and after three failed tries
+  raises an alert. Every step is in the log.
 - **Sleep and wake:** after the machine wakes, FanKick re-applies every fan's setting.
 - **Conflict check:** if another fan or hardware app is running (FanControl, HWiNFO, Armoury Crate, G-Helper, Argus,
   CoolerControl, Macs Fan Control...), FanKick waits for you before touching any hardware.
 - **Never wakes a sleeping laptop GPU** just to read its temperature.
+
+Opt-in:
+
+- **CPU temperature limit** (Settings > Safety; off by default, because many CPUs are designed to run at 90 to
+  95 °C under load): at or over your limit for 6 seconds, every fan goes to 100% and CPU boost is turned off, until
+  the CPU has been 10 °C under it for a minute. Turning boost off is often the strongest way to cut CPU heat (25 to
+  30% less power at full load). With the limit on, boost also goes off if the CPU temperature stops reading or a fan
+  stops following FanKick.
+- **Full speed instead of BIOS** for lost sensors, crashes or quitting: for machines whose BIOS can't be trusted
+  with the fans (for example a laptop whose fan controller can't read the CPU temperature).
+- **Performance modes** (Modes tab): FanKick sets one only when you pick it, and then sets it again at each start.
 
 ## How it gets access, per OS
 

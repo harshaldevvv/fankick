@@ -110,7 +110,7 @@ public class EngineTests
     [Fact]
     public void Panic_overrides_everything_including_auto_fans()
     {
-        var (e, hw) = Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Auto });
+        var (e, hw) = Make(s => { s.PanicTemp = 95; s.Fans["fan"] = new FanSettings { Mode = FanMode.Auto }; });
         e.Tick(1);
         Assert.Empty(hw.Calls);                        // auto: BIOS in charge, we don't touch it
         hw.Cpu.Value = 96; e.Refresh(); e.Tick(1);
@@ -128,6 +128,7 @@ public class EngineTests
     {
         var (e, hw) = Make(s =>
         {
+            s.OnSensorLost = FailSafe.FullSpeed;
             s.Curves.Add(new GraphCurve { Name = "c", Sensor = "cpu", Points = [new(0, 20)] });
             s.Fans["fan"] = new FanSettings { Mode = FanMode.Curve, Curve = "c" };
         });
@@ -196,6 +197,34 @@ public class SettingsFileTests
     }
 }
 
+public class DefaultsTests
+{
+    [Fact]
+    public void A_fresh_install_leaves_a_normal_pc_alone()
+    {
+        var s = new Settings();
+        Assert.Equal(0, s.CpuLimit);                           // CPU protection is opt-in
+        Assert.Equal(100, s.PanicTemp);
+        Assert.Equal(FailSafe.Bios, s.OnSensorLost);
+        Assert.Equal(FailSafe.Bios, s.OnCrash);
+        Assert.Equal(FailSafe.Bios, s.OnExit);
+        Assert.Equal("", s.Overlay.Hotkey);
+        Assert.False(s.Overlay.Enabled);
+        Assert.Empty(s.Modes);
+
+        var hw = new FakeHardware();
+        var t = new DateTime(2026, 1, 1);
+        var e = new Engine([hw], s) { Now = () => t };
+        void Run(int secs) { for (int i = 0; i <= secs; i++) { e.Refresh(); e.Tick(1); t = t.AddSeconds(1); } }
+        hw.Cpu.Value = 95;                                     // normal for many CPUs under load
+        Run(120);
+        hw.Cpu.Value = float.NaN;                              // sensor gone
+        Run(30);
+        Assert.Empty(hw.Calls);                                // no fan touched: the BIOS stays in charge
+        Assert.False(e.ProtectCpu);                            // and CPU boost is left alone
+    }
+}
+
 public class SafetyTests
 {
     [Fact]
@@ -259,7 +288,7 @@ public class SafetyTests
     public void Watchdog_raises_the_alarm_after_three_failed_tries()
     {
         hw.Rpm.Value = 5200;
-        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 100 });
+        Make(s => { s.CpuLimit = 90; s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 100 }; });
         Run(31);
         hw.Rpm.Value = 3000;
         Run(400);                                              // tries back off: 60 s, then 120 s
@@ -344,7 +373,7 @@ public class SafetyTests
     [Fact]
     public void Lost_cpu_temperature_goes_full_speed()
     {
-        Make(s => s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 });
+        Make(s => { s.OnSensorLost = FailSafe.FullSpeed; s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 }; });
         hw.Cpu.Value = float.NaN;
         Run(4);
         Assert.False(e.CpuLost);

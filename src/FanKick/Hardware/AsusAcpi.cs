@@ -21,9 +21,9 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
     // Some BIOS versions (seen on a G513QE, BIOS 331) flip the fan's custom curve on/off at every write instead of
     // just setting it; there a speed change must be written twice. Off by default; Settings > ASUS turns it on.
     public static bool WriteTwice { get; set; }
-    // The ASUS mode written when FanKick opens the device (the last one picked in Modes). Writing a mode switches every
-    // custom curve off, so FanKick starts from a known state on any BIOS.
-    public static string StartMode { get; set; } = "Balanced";
+    // The ASUS mode the user picked in FanKick, written when FanKick opens the device (it also switches every custom
+    // curve off, a known starting state). Null = never picked: FanKick leaves the firmware mode alone.
+    public static string? StartMode { get; set; }
 
     readonly SafeFileHandle handle;
     readonly object gate = new();   // one DeviceIoControl at a time
@@ -31,9 +31,10 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
     readonly List<Sensor> sensors = [];
     readonly List<FanControl> fans = [];
     readonly Dictionary<FanControl, (uint curve, uint rpm, Sensor rpmSensor)> devs = [];
+    readonly Dictionary<FanControl, byte[]> factory = []; // each fan's stored curve (8 temps, 8 %), for handing it back
     readonly Dictionary<FanControl, int> applied = []; // fans whose custom curve is on right now, and at what %
     readonly Dictionary<FanControl, int> wanted = [];  // fans FanKick drives, and at what % (survives mode writes)
-    int mode;
+    int? mode; // null until written by FanKick (the firmware doesn't report it)
 
     public string Name => "ASUS ACPI";
     // Each curve write dips the fan by ~1,500 rpm, and on flip-on-write BIOSes every extra write is a chance to lose
@@ -47,28 +48,35 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
     {
         handle = h;
         if (probeOnly) return;
-        foreach (var (name, curve, rpm) in Find(this)) AddFan(name, curve, rpm);
-        if (fans.Count > 0) WriteMode(Math.Max(0, Array.IndexOf(ModeNames, StartMode)));
+        foreach (var (name, curve, rpm, stored) in Find(this)) AddFan(name, curve, rpm, stored);
+        // A flip-on-write BIOS needs a known curve state, which only a mode write gives.
+        if (fans.Count > 0 && (StartMode != null || WriteTwice))
+            WriteMode(Math.Max(0, Array.IndexOf(ModeNames, StartMode ?? "Balanced")));
     }
 
     // The fans this firmware has: a stored curve and a readable rpm. Models without a fan refuse the call (error 1)
     // or answer "unsupported" (0xFFFFFFFE); either just means no such fan.
-    static IEnumerable<(string name, uint curve, uint rpm)> Find(AsusAcpi a)
+    static IEnumerable<(string name, uint curve, uint rpm, byte[] stored)> Find(AsusAcpi a)
     {
         foreach (var k in Known)
         {
             bool ok;
+            byte[] buf = [];
             try
             {
-                var buf = a.Call(Dsts, Args(k.curve));
+                buf = a.Call(Dsts, Args(k.curve));
                 uint first = BitConverter.ToUInt32(buf, 0);
                 ok = !buf.Take(16).All(b => b == 0) && first is not (0xFFFFFFFE or 0xFFFFFFFF);
                 if (ok) a.Call(Dsts, Args(k.rpm));
             }
             catch (IOException ex) { Log.Write($"ASUS ACPI: no {k.name} ({ex.Message})"); ok = false; }
-            if (ok) yield return k;
+            if (ok) yield return (k.name, k.curve, k.rpm, buf[..16]);
         }
     }
+
+    // A stored curve we can write back: temperatures rising and plausible, speeds 0..100 %.
+    static bool Plausible(byte[] c) =>
+        c.Length == 16 && c[7] <= 120 && Enumerable.Range(1, 7).All(i => c[i] >= c[i - 1]) && c[8..].All(p => p <= 100);
 
     // `FanKick --probe-asus`: log which ASUS fans and speeds FanKick sees, reading only (no writes).
     public static void Probe()
@@ -78,19 +86,20 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
         using (h)
         {
             var a = new AsusAcpi(h, probeOnly: true);
-            foreach (var (name, curve, rpm) in Find(a))
+            foreach (var (name, curve, rpm, _) in Find(a))
                 Log.Write($"probe: {name} (curve {curve:x8}) at {(BitConverter.ToUInt32(a.Call(Dsts, Args(rpm)), 0) & 0xFFFF) * 100} rpm");
             Log.Write("probe: done");
         }
     }
 
-    void AddFan(string name, uint curve, uint rpm)
+    void AddFan(string name, uint curve, uint rpm, byte[] stored)
     {
         var s = new Sensor($"asus/{curve:x}/rpm", name, "ASUS", SensorKind.Fan);
         var f = new FanControl($"asus/{curve:x}", name, "ASUS") { RpmSensorId = s.Id };
         sensors.Add(s);
         fans.Add(f);
         devs[f] = (curve, rpm, s);
+        if (Plausible(stored)) factory[f] = stored;
     }
 
     public static AsusAcpi? TryOpen()
@@ -109,7 +118,7 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
 
     public IEnumerable<ModeGroup> Modes()
     {
-        yield return new ModeGroup("ASUS mode", ModeNames, () => ModeNames[mode], v =>
+        yield return new ModeGroup("ASUS mode", ModeNames, () => mode is { } m ? ModeNames[m] : null, v =>
         {
             lock (op) { WriteMode(Math.Max(0, Array.IndexOf(ModeNames, v))); Reapply(); }
         }) { Note = "The same firmware modes as Armoury Crate. Fans you set in FanKick stay under FanKick's control." };
@@ -140,8 +149,12 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
     // startup sequence (mode, then every curve).
     public void Resume()
     {
-        lock (op) { WriteMode(mode); Reapply(); }
-        Log.Write("ASUS ACPI: mode and fan curves re-applied");
+        lock (op)
+        {
+            if (mode is { } m) WriteMode(m);
+            Reapply();
+        }
+        Log.Write(mode is null ? "ASUS ACPI: fan curves re-applied" : "ASUS ACPI: mode and fan curves re-applied");
     }
 
     public void Update()
@@ -170,13 +183,24 @@ public sealed class AsusAcpi : Core.IHardware, IResumable, IWriteLimited
     }
 
     // Re-writing the mode turns every custom curve off; the other fans then get theirs back.
+    // Hand a fan back to the firmware. With the user's mode known, re-write it (that switches every custom curve off)
+    // and give the other fans theirs back. Otherwise leave the mode alone and write the fan's own stored curve.
     public void Restore(FanControl fan)
     {
         lock (op)
         {
             wanted.Remove(fan);
-            WriteMode(mode);
-            Reapply();
+            if (mode is { } m || !factory.TryGetValue(fan, out var stored))
+            {
+                WriteMode(mode ?? 0);
+                Reapply();
+                return;
+            }
+            var a = new byte[20];
+            BitConverter.GetBytes(devs[fan].curve).CopyTo(a, 0);
+            stored.CopyTo(a, 4);
+            Call(Devs, a);
+            applied.Remove(fan);
         }
     }
 

@@ -30,20 +30,24 @@ public sealed class OverlaySettings
     public int OffsetY { get; set; } = 12;
     public float Opacity { get; set; } = 0.85f;
     public List<string> Sensors { get; set; } = [Engine.Hottest]; // empty = the default set
-    public string Hotkey { get; set; } = "Ctrl+Shift+F10";
+    public string Hotkey { get; set; } = ""; // none until the user picks one: a global hotkey can clash with other apps
 }
 
 public sealed class Settings
 {
     public List<Curve> Curves { get; set; } = Presets.Names.Select(Presets.Build).ToList();
     public Dictionary<string, FanSettings> Fans { get; set; } = [];
-    // Any CPU/GPU core at or over this: every fan to 100% until 10 °C under it, whatever the curves say.
-    public int PanicTemp { get; set; } = 95;
-    // CPU at or over this for 6 s: every fan to 100% and CPU boost off, until it has been 10 °C under for a minute.
-    // 0 = off.
-    public int CpuLimit { get; set; } = 90;
-    public FailSafe OnSensorLost { get; set; } = FailSafe.FullSpeed;
-    public FailSafe OnCrash { get; set; } = FailSafe.FullSpeed;
+    // Any CPU/GPU core at or over this: every fan to 100% until 10 °C under it, whatever the curves say. 100 °C is
+    // past every common CPU's throttle point, so a healthy PC never sees it.
+    public int PanicTemp { get; set; } = 100;
+    // Opt-in CPU protection, off (0) by default: many CPUs are designed to run at 90-95 °C under load. When set, the
+    // CPU at or over this for 6 s sends every fan to 100% and turns CPU boost off until it has been 10 °C under for a
+    // minute; boost also goes off if the CPU temperature is lost or a fan stops following FanKick.
+    public int CpuLimit { get; set; }
+    // Defaults hand fans back to the BIOS, the normal state of every PC; full speed is for machines whose BIOS can't
+    // be trusted with them.
+    public FailSafe OnSensorLost { get; set; } = FailSafe.Bios;
+    public FailSafe OnCrash { get; set; } = FailSafe.Bios;
     public FailSafe OnExit { get; set; } = FailSafe.Bios;
     public int IntervalMs { get; set; } = 1000;
     public OverlaySettings Overlay { get; set; } = new();

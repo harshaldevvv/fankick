@@ -51,8 +51,8 @@ public sealed class Engine : IDisposable
     public bool CpuLost { get; private set; }
     // A fan ignored three re-applies in a row.
     public bool FansFailing { get; private set; }
-    // The app turns CPU boost off while this holds.
-    public bool ProtectCpu => LimitActive || CpuLost || FansFailing;
+    // The app turns CPU boost off while this holds; only for users who opted in with a CPU temperature limit.
+    public bool ProtectCpu => Settings.CpuLimit > 0 && (LimitActive || CpuLost || FansFailing);
     public event Action? Updated;
     // Raised when the watchdog learns a fan's speed, so the app can save it.
     public event Action? Learned;
@@ -274,9 +274,9 @@ public sealed class Engine : IDisposable
         else if (cpuSeen && !CpuLost && (clock - (cpuMissingSince ??= clock)).TotalSeconds >= 5)
         {
             CpuLost = true;
-            Log.Write("CPU temperature lost: fans to " + (Settings.OnSensorLost == FailSafe.FullSpeed ? "full speed" : "BIOS control") + ", CPU boost off");
+            Log.Write("CPU temperature lost: fans to " + (Settings.OnSensorLost == FailSafe.FullSpeed ? "full speed" : "BIOS control") + (Settings.CpuLimit > 0 ? ", CPU boost off" : ""));
         }
-        if (CpuLost) alerts.Add("The CPU temperature can't be read any more, so every fan runs at full speed and CPU boost is off.");
+        if (CpuLost) alerts.Add("The CPU temperature can't be read any more, so " + (Settings.OnSensorLost == FailSafe.FullSpeed ? "every fan runs at full speed" : "fans on curves are back with the BIOS") + (Settings.CpuLimit > 0 ? " and CPU boost is off." : "."));
 
         int lim = Settings.CpuLimit;
         if (lim > 0 && cpu >= lim) { overSince ??= clock; underSince = null; }
@@ -332,7 +332,7 @@ public sealed class Engine : IDisposable
         if (settled < w.Grace) return;
         w.SlowSince ??= clock;
         if (w.Tries >= 3)
-            alerts.Add($"{fan.Name} isn't following FanKick: {rpm:F0} rpm at {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}. CPU boost is off until it does. If it started after sleep, hibernating or shutting down fully (not restarting) resets the fan controller on some laptops.");
+            alerts.Add($"{fan.Name} isn't following FanKick: {rpm:F0} rpm at {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}.{(Settings.CpuLimit > 0 ? " CPU boost is off until it does." : "")} If it started after sleep, hibernating or shutting down fully (not restarting) resets the fan controller on some laptops.");
         if ((clock - w.SlowSince.Value).TotalSeconds < 10 || clock < w.NextTry) return;
         w.Tries++;
         Log.Write($"watchdog: {fan.Name} at {rpm:F0} rpm for {fan.Percent}%{(normal > 0 ? $" (normally {normal})" : "")}: re-applying (try {w.Tries})");
