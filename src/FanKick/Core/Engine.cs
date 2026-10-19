@@ -79,6 +79,7 @@ public sealed class Engine : IDisposable
     }
 
     public float Read(string id) => byId.TryGetValue(id, out var s) ? s.Value : float.NaN;
+    public string? PathOf(string id) => hardware.OfType<IHasPaths>().Select(h => h.PathOf(id)).FirstOrDefault(p => p != null);
     public Sensor? Find(string id) => byId.GetValueOrDefault(id);
 
     public float[] History(string id)

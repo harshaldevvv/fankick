@@ -20,6 +20,10 @@ public sealed class App : Application
     public List<ModeGroup> Modes { get; } = [];
     public List<string> Conflicts { get; private set; } = [];
     public StressTest Stress { get; } = new();
+    // Settings found from other fan apps, offered once on first run and again from Settings.
+    public List<ImportOffer> Offers { get; private set; } = [];
+    public bool ShowImport { get; set; }
+    bool firstRun;
     public bool Quitting { get; private set; }
     public string? HotkeyError { get; private set; }
 
@@ -40,6 +44,7 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         var life = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
+        firstRun = !File.Exists(SettingsPath);
         Settings = Settings.Load(SettingsPath);
         Log.Write($"settings: {SettingsPath} ({(File.Exists(SettingsPath) ? "found" : "new")}), {Settings.Fans.Count} fan entries, {Settings.Curves.Count} curves");
         if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = Settings.AsusWriteTwice;
@@ -77,6 +82,12 @@ public sealed class App : Application
         Engine.Start();
         Log.Write($"engine: {hw.Count} backend(s), {Engine.Sensors.Count} sensors, {Engine.Fans.Count} fans: " + string.Join(", ", Engine.Fans.Select(f => f.Name)));
         if (!Program.Demo && Engine.Fans.Count > 0 && !OperatingSystem.IsMacOS()) Guard.Spawn();
+        if (!Program.Demo)
+        {
+            Offers = Importers.Find(Engine);
+            ShowImport = firstRun && !Settings.ImportOffered && Offers.Count > 0; // upgrades don't get asked
+            if (Offers.Count > 0) Log.Write("found settings from: " + string.Join(", ", Offers.Select(o => o.Source)));
+        }
         // Modes picked in FanKick are set again at every start (some firmware, like ASUS's charge limit, forgets them).
         var saved = Settings.Modes.ToList();
         _ = Task.Run(() =>
@@ -154,6 +165,28 @@ public sealed class App : Application
         if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = Settings.AsusWriteTwice;
         Log.Write($"settings reloaded (changed outside FanKick): CPU limit {Settings.CpuLimit} °C, panic {Settings.PanicTemp} °C");
         ApplyOverlay();
+        window?.Rebuild();
+    }
+
+    // The user's answer to the import offer: another app's settings, or null to keep the BIOS in control.
+    public void ApplyImport(ImportOffer? offer)
+    {
+        lock (Settings)
+        {
+            offer?.Apply(Settings);
+            Settings.ImportOffered = true;
+        }
+        ShowImport = false;
+        Log.Write(offer == null ? "import offer: kept BIOS control" : $"imported settings from {offer.Source}");
+        // Modes it brought (ASUS mode, charge limit) take effect now, not only at the next start.
+        var modes = Settings.Modes.ToList();
+        _ = Task.Run(() =>
+        {
+            foreach (var (title, option) in modes)
+                if (Modes.FirstOrDefault(g => g.Title == title) is { } g && g.Options.Contains(option) && g.Current != option)
+                    try { g.Set(option); } catch (Exception ex) { Log.Write($"{title}: {ex.Message}"); }
+        });
+        Save();
         window?.Rebuild();
     }
 

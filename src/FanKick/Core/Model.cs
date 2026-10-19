@@ -59,6 +59,12 @@ public interface IWriteLimited
     int MinStep { get; }
 }
 
+// Backends whose sensors and fans are files (Linux sysfs): the file behind an id, for importing other tools' configs.
+public interface IHasPaths
+{
+    string? PathOf(string id);
+}
+
 // Backends whose hardware can drop our settings while the machine sleeps (ASUS firmware does).
 public interface IResumable
 {

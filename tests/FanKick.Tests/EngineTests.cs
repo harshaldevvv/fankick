@@ -10,8 +10,9 @@ static class TestSetup
     internal static void Init() => Log.Path = Path.Combine(Path.GetTempPath(), "FanKick-tests.log");
 }
 
-sealed class FakeHardware : IHardware, IResumable, IWriteLimited
+sealed class FakeHardware : IHardware, IResumable, IWriteLimited, IHasPaths
 {
+    public string? PathOf(string id) => id switch { "fan" => "/sys/class/hwmon/hwmon2/pwm1", "cpu" => "/sys/class/hwmon/hwmon1/temp1_input", _ => null };
     public int MinStep { get; set; }
     public readonly Sensor Cpu = new("cpu", "CPU", "cpu", SensorKind.Temperature) { Critical = true, Cpu = true, Value = 50 };
     public readonly Sensor Disk = new("disk", "Disk", "disk", SensorKind.Temperature) { Value = 40 };
@@ -383,5 +384,121 @@ public class SafetyTests
         hw.Cpu.Value = 50;
         Run(1);
         Assert.False(e.CpuLost);
+    }
+}
+
+sealed class FakeAsus : IHardware
+{
+    public readonly Sensor Cpu = new("cpu", "Core (Tctl/Tdie)", "Ryzen", SensorKind.Temperature) { Critical = true, Cpu = true, Value = 50 };
+    public readonly Sensor Gpu = new("gpu", "GPU Core", "RTX", SensorKind.Temperature) { Critical = true, Value = 45 };
+    public string Name => "fake ASUS";
+    public string? Notice => null;
+    public IReadOnlyList<Sensor> Sensors => [Cpu, Gpu];
+    public IReadOnlyList<FanControl> Fans { get; } = [new("asus/110024", "CPU fan", "ASUS"), new("asus/110025", "GPU fan", "ASUS")];
+    public void Update() { }
+    public void Set(FanControl fan, int percent) { }
+    public void Restore(FanControl fan) { }
+    public void Dispose() { }
+}
+
+public class ImportTests
+{
+    [Fact]
+    public void FanControl_new_layout_maps_fans_curves_and_sensors()
+    {
+        var e = new Engine([new FakeHardware()], new Settings());
+        const string json = """
+            { "__VERSION__": "268", "FanControl": {
+                "FanCurves": [
+                  { "Name": "CPU", "SelectedTempSource": { "Identifier": "cpu" }, "Points": ["40,20", "80.5,100"],
+                    "HysteresisConfig": { "HysteresisValueDown": 3 } },
+                  { "Name": "Board", "SelectedTempSource": { "Identifier": "/lpc/missing/temperature/0" }, "Points": ["30,30", "60,90"] },
+                  { "Name": "Both", "SelectedFanCurves": [ { "Name": "CPU" }, { "Name": "Board" } ], "SelectedMixFunction": 0 },
+                  { "Name": "Quiet", "Percent": 35 } ],
+                "Controls": [
+                  { "NickName": "Front", "Identifier": "fan", "Enable": true, "SelectedFanCurve": { "Name": "Both" },
+                    "MinimumPercent": 15, "SelectedCommandStepUp": 8, "SelectedCommandStepDown": 4, "ManualControl": false },
+                  { "NickName": "Gone", "Identifier": "/lpc/nct6798d/control/5", "Enable": true, "SelectedFanCurve": { "Name": "CPU" } } ] } }
+            """;
+        var o = Importers.FromFanControl(json, e)!;
+        Assert.Contains(o.Summary, l => l.Contains("Gone") && l.Contains("not found"));
+        Assert.Contains(o.Summary, l => l.Contains("Board") && l.Contains("hottest"));
+        var s = new Settings();
+        o.Apply(s);
+        Assert.Equal(FanMode.Curve, s.Fans["fan"].Mode);
+        Assert.Equal("Both", s.Fans["fan"].Curve);
+        Assert.Equal(15, s.Fans["fan"].Min);
+        Assert.Equal(8, s.Fans["fan"].StepUp);
+        var cpu = Assert.IsType<GraphCurve>(s.Find("CPU"));
+        Assert.Equal("cpu", cpu.Sensor);
+        Assert.Equal(3, cpu.Hysteresis);
+        Assert.Equal(80.5f, cpu.Points[1].Temp);
+        Assert.Equal(Engine.Hottest, Assert.IsType<GraphCurve>(s.Find("Board")).Sensor);
+        Assert.Equal(MixFunction.Max, Assert.IsType<MixCurve>(s.Find("Both")).Function);
+        Assert.Equal(35, Assert.IsType<FlatCurve>(s.Find("Quiet")).Percent);
+    }
+
+    [Fact]
+    public void FanControl_old_layout_with_manual_fan_and_auto_curve()
+    {
+        var e = new Engine([new FakeHardware()], new Settings());
+        const string json = """
+            { "Main": {
+                "FanCurves": [ { "Name": "Auto", "SelectedTempSource": { "Identifier": "cpu" }, "IdleTemperature": 35, "LoadTemperature": 70, "MinFanSpeed": 25, "MaxFanSpeed": 90 } ],
+                "Controls": [ { "Name": "Pump", "Identifier": "fan", "Enable": true, "ManualControl": true, "ManualControlValue": 70, "SelectedFanCurve": { "Name": "Auto" } } ] } }
+            """;
+        var s = new Settings();
+        Importers.FromFanControl(json, e)!.Apply(s);
+        Assert.Equal(FanMode.Fixed, s.Fans["fan"].Mode);
+        Assert.Equal(70, s.Fans["fan"].Fixed);
+        var auto = Assert.IsType<GraphCurve>(s.Find("Auto"));
+        Assert.Equal([new CurvePoint(35, 25), new CurvePoint(70, 90)], auto.Points);
+    }
+
+    [Fact]
+    public void FanControl_with_every_fan_disabled_offers_nothing()
+    {
+        var e = new Engine([new FakeHardware()], new Settings());
+        Assert.Null(Importers.FromFanControl("""{ "FanControl": { "FanCurves": [], "Controls": [ { "Identifier": "fan", "Enable": false } ] } }""", e));
+    }
+
+    [Fact]
+    public void GHelper_mode_charge_limit_and_curves_only_when_applied()
+    {
+        var e = new Engine([new FakeAsus()], new Settings());
+        const string on = """
+            { "performance_mode": 1, "charge_limit": 80, "auto_apply_1": 1,
+              "fan_profile_cpu_1": "1E-3F-44-48-4C-50-54-62-11-1A-22-29-34-43-51-5A",
+              "fan_profile_gpu_1": "1E-3F-44-48-4C-50-54-62-11-1A-22-29-34-43-51-5A" }
+            """;
+        var s = new Settings();
+        Importers.FromGHelper(on, e)!.Apply(s);
+        Assert.Equal("Turbo", s.Modes["ASUS mode"]);
+        Assert.Equal("80%", s.Modes["Battery charge limit"]);
+        var c = Assert.IsType<GraphCurve>(s.Find(s.Fans["asus/110024"].Curve));
+        Assert.Equal("cpu", c.Sensor);
+        Assert.Equal(new CurvePoint(30, 17), c.Points[0]);
+        Assert.Equal(new CurvePoint(98, 90), c.Points[7]);
+        Assert.Equal("gpu", Assert.IsType<GraphCurve>(s.Find(s.Fans["asus/110025"].Curve)).Sensor);
+
+        // Custom mode 3 built on Silent, curves not applied there: mode only, fans stay with the firmware.
+        var s2 = new Settings();
+        Importers.FromGHelper("""{ "performance_mode": 3, "mode_base_3": 2, "fan_profile_cpu_3": "1E-3F-44-48-4C-50-54-62-11-1A-22-29-34-43-51-5A" }""", e)!.Apply(s2);
+        Assert.Equal("Silent", s2.Modes["ASUS mode"]);
+        Assert.DoesNotContain(s2.Fans, f => f.Value.Mode != FanMode.Auto);
+    }
+
+    [Fact]
+    public void Linux_fancontrol_becomes_straight_line_curves()
+    {
+        var e = new Engine([new FakeHardware()], new Settings());
+        const string conf = "# Configuration file generated by pwmconfig\nINTERVAL=10\nFCTEMPS=hwmon2/pwm1=hwmon1/temp1_input\nFCFANS=hwmon2/pwm1=hwmon2/fan1_input\nMINTEMP=hwmon2/pwm1=40\nMAXTEMP=hwmon2/pwm1=70\nMINSTART=hwmon2/pwm1=150\nMINSTOP=hwmon2/pwm1=51\n";
+        var s = new Settings();
+        Importers.FromFancontrol(conf, e)!.Apply(s);
+        var c = Assert.IsType<GraphCurve>(s.Find(s.Fans["fan"].Curve));
+        Assert.Equal("cpu", c.Sensor);
+        Assert.Equal(0, c.Points[0].Percent);          // MINPWM default 0 at/below MINTEMP
+        Assert.Equal(20, c.Points[1].Percent);         // MINSTOP 51/255
+        Assert.Equal(new CurvePoint(70, 100), c.Points[2]);
     }
 }

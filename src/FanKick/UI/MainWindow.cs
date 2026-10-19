@@ -68,6 +68,7 @@ sealed class MainWindow : Window
         var e = app.Engine!;
         var root = Col(16);
         root.Children.Add(Banners(e));
+        if (app.ShowImport) root.Children.Add(ImportPanel());
 
         Sensor? Pick(SensorKind k, Func<Sensor, bool> f) => e.Sensors.FirstOrDefault(s => s.Kind == k && f(s));
         var cpuLoad = Pick(SensorKind.Load, s => s.Name == "CPU Total");
@@ -122,6 +123,22 @@ sealed class MainWindow : Window
         };
         root.Children.Add(cards);
         return root;
+    }
+
+    // First run: settings from other fan apps on this PC, offered, never applied without a click.
+    Control ImportPanel()
+    {
+        var col = Col(10, Heading("Bring over your fan settings?"),
+            Muted("FanKick found settings from other fan apps on this PC. Nothing changes unless you choose one. Keeping the BIOS in control is the normal, balanced choice; you can import later from Settings."));
+        foreach (var o in app.Offers)
+        {
+            var lines = Col(2, Txt(o.Source, 14, Fg, FontWeight.SemiBold));
+            foreach (var l in o.Summary) lines.Children.Add(Muted(l));
+            lines.Children.Add(Btn("Use these settings", () => app.ApplyImport(o)));
+            col.Children.Add(new Border { BorderBrush = Edge, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 10, 0, 0), Child = lines });
+        }
+        col.Children.Add(Btn("Keep BIOS control (recommended)", () => app.ApplyImport(null), true));
+        return Box(col);
     }
 
     Control Banners(Core.Engine e)
@@ -505,6 +522,9 @@ sealed class MainWindow : Window
             twice.IsCheckedChanged += (_, _) => { S.AsusWriteTwice = twice.IsChecked == true; if (OperatingSystem.IsWindows()) AsusAcpi.WriteTwice = S.AsusWriteTwice; app.Save(); };
             system.Children.Add(Labeled("ASUS", twice, "Turn on if ASUS fans ignore every other change."));
         }
+        if (app.Offers.Count > 0)
+            system.Children.Add(Labeled("Other fan apps", Btn("Import settings...", () => { app.ShowImport = true; tabs.SelectedIndex = 0; Rebuild(); }),
+                "Found: " + string.Join(", ", app.Offers.Select(o => o.Source))));
         system.Children.Add(Labeled("Files", Row(8,
             Btn("Open settings folder", () => Launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(Settings.Dir))),
             Muted(Settings.Dir))));

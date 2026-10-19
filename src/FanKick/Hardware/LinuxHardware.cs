@@ -5,13 +5,15 @@ namespace FanKick.Hardware;
 // Linux: every hwmon device the kernel exposes (k10temp, coretemp, nct67xx, it87, amdgpu, nvme, asus, thinkpad,
 // dell-smm...), plus RAPL CPU power, CPU load and clocks from /proc and cpufreq, amdgpu RDNA3+ fan curves, and NVIDIA
 // GPUs through NVML. Reading needs no privileges; changing fans needs root.
-public sealed class LinuxHardware : IHardware
+public sealed class LinuxHardware : IHardware, IHasPaths
 {
     const string Hwmon = "/sys/class/hwmon";
     readonly List<Sensor> sensors = [];
     readonly List<(Sensor s, string path, float scale)> files = [];
     readonly List<FanControl> fans = [];
     readonly Dictionary<FanControl, FanPath> paths = [];
+    readonly Dictionary<string, string> fileOf = []; // id -> sysfs file
+    public string? PathOf(string id) => fileOf.GetValueOrDefault(id);
     readonly Nvml? nvml;
     readonly Sensor? cpuLoad, cpuClock, raplW;
     readonly string? raplPath;
@@ -75,6 +77,7 @@ public sealed class LinuxHardware : IHardware
                             || chip is "amdgpu" or "i915" or "xe" && label is "edge" or "temp1");
             var s = Add(new Sensor($"{id}/{stem}", label, group, kind) { Critical = critical, Cpu = critical && group == "CPU" });
             files.Add((s, $"{dir}/{f}", scale));
+            fileOf[s.Id] = $"{dir}/{f}";
         }
         // pwmN with pwmN_enable = a fan header we can drive (1 = manual, 2+ = automatic modes).
         foreach (var pwm in Directory.GetFiles(dir, "pwm*").Where(p => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(p), @"^pwm\d+$")))
@@ -87,6 +90,7 @@ public sealed class LinuxHardware : IHardware
             { RpmSensorId = File.Exists($"{dir}/fan{n}_input") ? $"{id}/fan{n}" : null };
             fans.Add(fan);
             paths[fan] = new PwmPath(pwm, enable, ReadText(enable));
+            fileOf[fan.Id] = pwm;
         }
         // amdgpu RDNA3+: no manual PWM, but a 5-point fan curve under gpu_od (Linux 6.7+). Driven with a flat curve.
         string od = ResolveDevice(dir) + "/gpu_od/fan_ctrl/fan_curve";
