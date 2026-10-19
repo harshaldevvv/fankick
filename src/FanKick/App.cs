@@ -126,12 +126,12 @@ public sealed class App : Application
     // settings.json edited outside FanKick (by hand, or by another tool): load it, a moment after the last change.
     DateTime ownSave;
     DispatcherTimer? reloadTimer;
+    FileSystemWatcher? watcher; // a field: a watcher only held by a local is garbage-collected and goes quiet
     void WatchSettingsFile()
     {
-        if (Program.Demo) return;
         try
         {
-            var w = new FileSystemWatcher(Settings.Dir, "settings.json") { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size };
+            var w = watcher = new FileSystemWatcher(Settings.Dir, Path.GetFileName(SettingsPath)) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size };
             FileSystemEventHandler on = (_, _) => Dispatcher.UIThread.Post(() =>
             {
                 reloadTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { reloadTimer!.Stop(); Reload(); });
