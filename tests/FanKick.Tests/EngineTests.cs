@@ -300,6 +300,24 @@ public class SafetyTests
     }
 
     [Fact]
+    public void A_moving_curve_does_not_hide_a_dead_fan()
+    {
+        // Seen live: the firmware took the CPU fan (0 rpm) while a curve kept changing its % every ~30 s; each write
+        // restarted a 75 s grace and the watchdog waited 3.5 minutes.
+        hw.Rpm.Value = 4800;
+        Make(s => { s.Curves.Add(new GraphCurve { Name = "c", Sensor = "cpu", Hysteresis = 0, Points = [new(40, 40), new(90, 100)] });
+                    s.Fans["fan"] = new FanSettings { Mode = FanMode.Curve, Curve = "c", StepUp = 0, StepDown = 0 }; });
+        Run(31);
+        hw.Rpm.Value = 0;
+        for (int i = 0; i < 4 && !hw.Calls.Contains("resume"); i++)
+        {
+            hw.Cpu.Value = i % 2 == 0 ? 70 : 52;                // the curve moves the fan every 10 s
+            Run(10);
+        }
+        Assert.Contains("resume", hw.Calls);                   // within 40 s of the fan stopping
+    }
+
+    [Fact]
     public void Cpu_limit_forces_full_speed_until_ten_under_for_a_minute()
     {
         Make(s => { s.CpuLimit = 80; s.Fans["fan"] = new FanSettings { Mode = FanMode.Fixed, Fixed = 40 }; });

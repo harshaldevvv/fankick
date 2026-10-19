@@ -30,6 +30,9 @@ public sealed class Engine : IDisposable
         // Seconds to wait after Changed before judging: longer when the fan starts from standstill or after a re-apply
         // (ASUS fans take most of a minute to climb back after a mode write).
         public double Grace = 30;
+        // When the fan was first seen off its normal speed (during the grace too). While set, our own speed changes
+        // don't restart the clock: a curve that keeps moving must not keep a dead fan from being noticed.
+        public DateTime? BadSince;
         public DateTime? SlowSince, OkSince;
         public DateTime NextTry;
         public int Tries;
@@ -153,7 +156,7 @@ public sealed class Engine : IDisposable
             }
             catch (Exception ex) { Log.Write($"{h.Name}: resume failed: {ex.Message}"); }
         var t = Now();
-        foreach (var w in watch.Values) { w.Changed = t; w.Grace = 60; w.SlowSince = null; }
+        foreach (var w in watch.Values) { w.Changed = t; w.Grace = 60; w.SlowSince = null; w.BadSince = null; }
     }
 
     public static float Step(float current, float target, float up, float down, double seconds)
@@ -237,9 +240,12 @@ public sealed class Engine : IDisposable
         {
             hw.Set(fan, pct);
             var wt = W(fan, clock);
-            wt.Changed = clock;
-            // A fan we just started from standstill can take a minute to spin up.
-            wt.Grace = fan.RpmSensorId is { } rid && Read(rid) < 100 ? 75 : 30;
+            if (wt.BadSince == null)
+            {
+                wt.Changed = clock;
+                // A fan we start from (nearly) stopped can take a minute to spin up; one that should already spin can't.
+                wt.Grace = fan.Percent < 20 && fan.RpmSensorId is { } rid && Read(rid) < 100 ? 75 : 30;
+            }
             if (fan.Percent < 0 || Math.Abs(pct - fan.Percent) >= 10 || pct == 100) Log.Write($"{fan.Name} -> {pct}%");
             fan.Percent = pct;
             failures[fan] = 0;
@@ -307,6 +313,7 @@ public sealed class Engine : IDisposable
         if (!slow)
         {
             w.SlowSince = null;
+            w.BadSince = null;
             if (w.Tries > 0 && (clock - (w.OkSince ??= clock)).TotalSeconds >= 10)
             {
                 Log.Write($"watchdog: {fan.Name} back to {rpm:F0} rpm at {fan.Percent}%");
@@ -321,6 +328,7 @@ public sealed class Engine : IDisposable
             return;
         }
         w.OkSince = null;
+        w.BadSince ??= clock;
         if (settled < w.Grace) return;
         w.SlowSince ??= clock;
         if (w.Tries >= 3)
@@ -340,6 +348,7 @@ public sealed class Engine : IDisposable
                     wf.Changed = clock;
                     wf.Grace = 60;
                     wf.SlowSince = null;
+                    wf.BadSince = null;
                 }
             }
             else owner[fan].Set(fan, fan.Percent);
@@ -348,6 +357,7 @@ public sealed class Engine : IDisposable
         w.Changed = clock;
         w.Grace = 60;
         w.SlowSince = null;
+        w.BadSince = null;
         w.NextTry = clock.AddSeconds(Math.Min(600, 60 << Math.Min(w.Tries - 1, 4)));
     }
 
